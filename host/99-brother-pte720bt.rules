@@ -1,0 +1,5 @@
+# Non-root USB access for the Brother PT-E720BT (04f9:224a).
+# Installed by host/setup.sh; unplug and replug the printer after install.
+# For other models, change idProduct (see `lsusb`).
+
+SUBSYSTEM=="usb", ATTRS{idVendor}=="04f9", ATTRS{idProduct}=="224a", MODE="0666"

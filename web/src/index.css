@@ -1,0 +1,10 @@
+@tailwind base;@tailwind components;@tailwind utilities;
+html,body,#root{width:800px;height:480px;margin:0;overflow:hidden;background:#0b0e13;color:#f1f5f9}
+*{user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent;touch-action:manipulation}
+img{pointer-events:none;-webkit-user-drag:none}
+@layer components{
+ .btn{@apply min-h-[56px] min-w-[56px] px-4 rounded-xl bg-panel border border-line text-lg font-semibold flex items-center justify-center gap-2 active:bg-line disabled:opacity-40}
+ .btn-acc{@apply bg-acc text-black border-acc active:bg-sky-300}
+ .btn-err{@apply bg-err text-white border-err active:bg-red-400}
+ .btn-ok{@apply bg-ok text-black border-ok active:bg-green-400}
+}

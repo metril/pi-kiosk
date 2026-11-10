@@ -1,0 +1,79 @@
+services:
+  labelmaker-bridge:
+    # Label-maker USB bridge (ghcr.io/metril/brother-label-maker).
+    # Pair it BEFORE the first `up -d` (see README / host/setup.sh output).
+    image: ghcr.io/metril/brother-label-maker:${LABELMAKER_TAG:-latest}
+    restart: unless-stopped
+    command: ["python", "-m", "labelmaker.driver.bridge", "serve"]
+    ports:
+      - "9177:9177"
+    volumes:
+      # Whole USB tree, not a single device node: node paths renumber on replug.
+      - /dev/bus/usb:/dev/bus/usb
+      # The bridge's key, certificate and the pinned app certificate.
+      - bridgedata:/data
+    # USB device nodes (major 189) without `--privileged`.
+    device_cgroup_rules:
+      - "c 189:* rmw"
+    group_add:
+      - lp
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; socket.create_connection(('127.0.0.1', 9177), 3).close()"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+
+  kiosk-api:
+    image: ghcr.io/metril/pi-kiosk-api:${KIOSK_TAG:-latest}
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8090:8090"
+    env_file: .env
+    environment:
+      BACKLIGHT_PATH: /backlight
+    volumes:
+      # Docker does not follow the symlinks in /sys/class/backlight (they point
+      # to ../../devices/...), so mount the one device dir (a bind source
+      # symlink is resolved). Find yours: ls /sys/class/backlight. bl_power is
+      # made world-writable by host/99-backlight.rules (api runs as uid 10001).
+      - /sys/class/backlight/${BACKLIGHT_DEVICE:-10-0045}:/backlight/${BACKLIGHT_DEVICE:-10-0045}:rw
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/kiosk/config', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+
+  kiosk-display:
+    image: ghcr.io/metril/pi-kiosk-display:${KIOSK_TAG:-latest}
+    build:
+      context: display
+    network_mode: host
+    # Kept privileged for now. Narrower alternative to try on the Pi:
+    #   devices: /dev/tty0, /dev/tty1, /dev/dri, /dev/input
+    #   device_cgroup_rules: ["c 13:* rmw", "c 226:* rmw"]
+    #   cap_add: [SYS_TTY_CONFIG]
+    privileged: true
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/input:/dev/input
+      - /dev/tty1:/dev/tty1
+    volumes:
+      - /run/udev:/run/udev:ro
+    depends_on:
+      kiosk-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  bridgedata: {}
