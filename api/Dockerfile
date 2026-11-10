@@ -1,4 +1,4 @@
-FROM node:22-alpine AS web
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web
 WORKDIR /web
 COPY web/ ./
 RUN npm ci && npm run build
