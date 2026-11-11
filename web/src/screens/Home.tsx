@@ -1,8 +1,12 @@
 import type { ReactNode } from 'react'
-import { Printer, ScanLine, Tag, Pause } from 'lucide-react'
-import { api } from '../api'
+import { useState } from 'react'
+import { Printer, ScanLine, Tag, Pause, FolderOpen, Smartphone, Lock } from 'lucide-react'
+import { api, ApiError, type KioskPreset } from '../api'
 import { usePoll } from '../hooks'
-import { Title } from '../components/ui'
+import { Title, Spinner, useToast, errMsg } from '../components/ui'
+import { useConfig, setBusy, isBusy } from '../store'
+import { ensureUnlocked } from '../session'
+import { Qr } from '../components/Unlock'
 import type { TabId } from '../App'
 
 type Lvl = 'ok' | 'warn' | 'err'
@@ -60,15 +64,50 @@ export default function Home({ go }: { go: (t: TabId) => void }) {
   } else if (lb.error) l = ['err', 'Unreachable']
 
   const n = held.data?.total
+  const cfg = useConfig(), toast = useToast()
+  const [running, setRunning] = useState<string | null>(null)
+  const [qr, setQr] = useState(false)
+  const run = async (p: KioskPreset) => {
+    if (running || isBusy('scan')) return
+    setRunning(p.id); setBusy('scan', true)
+    try {
+      if (p.needs_unlock && !(await ensureUnlocked())) return
+      const sc = p.scan ?? {}
+      const s = await api.startScan({ resolution: 300, mode: 'Color', format: 'pdf', source: 'Flatbed', ...sc })
+      if (s.status === 'failed') return toast(s.error_message || 'Scan failed')
+      if (!p.targets.length) return toast('Scanned', 'ok')
+      const r = await api.send({ scan_id: s.scan_id, targets: p.targets, post: p.post, delete_after: p.delete_after })
+      toast(r.all_ok ? 'Scanned and sent' : 'Scanned, but some steps failed', r.all_ok ? 'ok' : 'err')
+    } catch (e) { if (!(e instanceof ApiError)) toast(errMsg(e)) } finally { setRunning(null); setBusy('scan', false) }
+  }
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col relative">
       <Title>Home</Title>
-      <div className="grid grid-cols-2 gap-3 flex-1 pb-2 content-start">
+      <div className="grid grid-cols-2 gap-3 flex-1 pb-2 content-start overflow-y-auto">
         <Tile icon={<Printer />} title="Printer" lvl={p[0]} text={p[1]} sub={p[2]} />
         <Tile icon={<ScanLine />} title="Scanner" lvl={s[0]} text={s[1]} />
+        {(cfg?.presets ?? []).map((p) => (
+          <button key={p.id} onClick={() => run(p)} disabled={!!running} className="bg-panel border border-line rounded-2xl p-4 text-left flex flex-col gap-2 min-h-[110px] active:bg-line relative disabled:opacity-60">
+            <div className="flex items-center gap-2 text-lg text-slate-300">{running === p.id ? <Spinner /> : <ScanLine />}Scan preset</div>
+            <div className="text-3xl font-bold leading-tight">{p.label ?? p.id}</div>
+            {p.needs_unlock && <Lock size={22} className="absolute top-3 right-3 text-warn" />}
+          </button>
+        ))}
+        <Tile icon={<FolderOpen />} title="Files" lvl={null} text="Browse" sub="Shares and cloud" onClick={() => go('files')} />
+        {cfg?.public_url && <Tile icon={<Smartphone />} title="Print from phone" lvl={null} text="Show QR" onClick={() => setQr(true)} />}
         <Tile icon={<Tag />} title="Label maker" lvl={l[0]} text={l[1]} sub={l[2]} onClick={() => go('labels')} />
         <Tile icon={<Pause />} title="Held jobs" lvl={n === undefined ? null : n > 0 ? 'warn' : 'ok'} text={n === undefined ? '…' : String(n)} sub={n ? 'Tap to release' : 'Nothing waiting'} onClick={() => go('queue')} />
       </div>
+      {qr && cfg?.public_url && (
+        <div className="absolute inset-0 z-30 bg-black/90 flex items-center justify-center" onClick={() => setQr(false)}>
+          <div className="bg-panel border border-line rounded-2xl p-4 flex flex-col items-center gap-2">
+            <Qr text={cfg.public_url} size={280} />
+            <div className="text-xl font-bold">Scan to print from your phone</div>
+            <div className="text-slate-300">{cfg.public_url}</div>
+            <div className="text-slate-400">Tap anywhere to close. Jobs appear in Queue.</div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -24,8 +24,12 @@ function parseErr(status: number, body: any): ApiError {
   return new ApiError(status, code, msg)
 }
 
+/** Opened on any 401 "locked"; resolves true once unlocked (request is then retried once). */
+let onLocked: (() => Promise<boolean>) | null = null
+export const setLockedHandler = (h: (() => Promise<boolean>) | null) => { onLocked = h }
+
 /** quiet: caller handles errors itself (no global toast). */
-async function req<T>(method: string, path: string, body?: unknown, quiet = false, signal?: AbortSignal): Promise<T> {
+async function req<T>(method: string, path: string, body?: unknown, quiet = false, signal?: AbortSignal, retried = false): Promise<T> {
   try {
     const r = await fetch(path, {
       method,
@@ -39,6 +43,11 @@ async function req<T>(method: string, path: string, body?: unknown, quiet = fals
     setOffline(r.status === 502 && data?.error?.code === 'upstream_unreachable')
     if (!r.ok) {
       const pe = parseErr(r.status, data)
+      if (r.status === 401 && data?.detail === 'locked') {
+        pe.code = 'locked'
+        if (!retried && onLocked && (await onLocked())) return await req<T>(method, path, body, quiet, signal, true)
+        throw pe
+      }
       if (r.status === 504 && pe.code === 'upstream_timeout') pe.message = 'Still working upstream — check the printer before retrying'
       throw pe
     }
@@ -47,10 +56,11 @@ async function req<T>(method: string, path: string, body?: unknown, quiet = fals
     if (signal?.aborted || (e instanceof DOMException && e.name === 'AbortError')) throw e
     const err = e instanceof ApiError ? e : new ApiError(0, 'network', 'Kiosk service unreachable')
     if (err.status === 0) setOffline(true)
-    if (!quiet && !(err.status === 502 && err.code === 'upstream_unreachable') && err.status !== 0) onError(err)
+    if (!quiet && err.code !== 'locked' && !(err.status === 502 && err.code === 'upstream_unreachable') && err.status !== 0) onError(err)
     throw err
   }
 }
+const del = <T,>(p: string) => req<T>('DELETE', p, undefined, false)
 const get = <T,>(p: string, quiet = true, signal?: AbortSignal) => req<T>('GET', p, undefined, quiet, signal)
 const post = <T,>(p: string, b?: unknown, quiet = false) => req<T>('POST', p, b ?? {}, quiet)
 const qs = (o: Record<string, string | number>) => '?' + new URLSearchParams(Object.entries(o).map(([k, v]) => [k, String(v)]))
@@ -69,8 +79,27 @@ export interface LabelStatus { connected: boolean; error: string | null; error_c
 export interface Preset { id: string; name: string; favorite: boolean; label_type: string; tape_family: string; tape_width_mm: number | null }
 export interface HistoryItem { id: string; status: string; label_count: number; kind: string; created_at: string; error: string | null; thumbnail_url: string | null }
 export interface LabelJob { id: string; status: string; error: string | null; label_count: number }
+export interface PresetTarget { type: 'paperless' | 'smb' | 'cloud' | 'email'; share_id?: string; path?: string; provider_id?: string; folder_id?: string; contact_id?: string }
+export interface KioskPreset {
+  id: string; label?: string; icon?: string; needs_unlock: boolean
+  scan?: Partial<ScanReq>; post?: { ocr?: boolean; enhance?: boolean }; targets: PresetTarget[]; delete_after?: boolean
+}
+export interface Contact { id: string; name: string }
+export interface UnlockState {
+  state: 'locked' | 'pending' | 'unlocked' | 'denied' | 'expired'
+  user?: string | null; remaining_s?: number; idle_remaining_s?: number
+  qr_uri?: string; user_code?: string; expires_in?: number
+}
+export interface SendResult { type: string; ok: boolean; status?: number; error?: string }
+export interface SendResp { post: Record<string, { ok: boolean }>; results: SendResult[]; all_ok: boolean; deleted: boolean }
+export interface SmbShare { id: string; name: string }
+export interface Entry { name: string; path: string; is_dir: boolean; id?: string; mime?: string; size?: number }
+export interface Provider { id: string; name: string }
 export interface KioskConfig {
   idle_minutes: number
+  name?: string; public_url?: string
+  unlock?: { idle_s: number; max_s: number }
+  presets?: KioskPreset[]; contacts?: Contact[]
   destinations: { paperless: boolean; smb: { share_id: string; path: string } | null; cloud: { provider_id: string } | null; email: { to: string } | null }
 }
 export interface ScreenState { on: boolean; brightness: number | null; max: number | null; reload_seq: number }
@@ -98,8 +127,26 @@ export const api = {
   labelJob: (id: string, sg?: Sig) => get<LabelJob>(`/labels/print/jobs/${id}`, true, sg),
   cancelLabel: (id: string) => post<unknown>(`/labels/print/jobs/${id}/cancel`),
   kioskConfig: (sg?: Sig) => get<KioskConfig>('/kiosk/config', true, sg),
+  unlockStart: () => post<UnlockState>('/kiosk/unlock/start', undefined, true),
+  unlockState: (sg?: Sig) => get<UnlockState>('/kiosk/unlock/state', true, sg),
+  unlockTouch: () => post<UnlockState>('/kiosk/unlock/touch', undefined, true),
+  lock: () => post<UnlockState>('/kiosk/lock', undefined, true),
+  send: (b: { scan_id: string; targets: PresetTarget[]; post?: { ocr?: boolean; enhance?: boolean }; delete_after?: boolean }) => post<SendResp>('/kiosk/send', b, true),
+  sendEmail: (scan_id: string, contact_id: string) => post<SendResult>('/kiosk/send/email', { scan_id, contact_id }, true),
+  printRemote: (b: { source: 'smb' | 'cloud'; ref: string; path: string; file_id?: string; copies: number; duplex: boolean }) => post<unknown>('/kiosk/print/remote', b),
+  printScan: (id: string, copies: number, duplex: boolean) => post<unknown>(`/kiosk/print/scan/${id}`, { copies, duplex }),
+  deleteScan: (id: string) => del<unknown>(`/papyrus/scans/${id}`),
+  smbShares: () => get<SmbShare[] | { items: SmbShare[] }>('/papyrus/smb/shares', false),
+  smbBrowse: (share: string, path: string) => get<Entry[] | { items?: Entry[]; entries?: Entry[] }>(`/papyrus/smb/browse/${share}` + qs({ path }), false),
+  providers: () => get<Provider[] | { items: Provider[] }>('/papyrus/cloud/providers', false),
+  cloudFiles: (prov: string, folder_id: string, path: string) => get<Entry[] | { items?: Entry[]; entries?: Entry[]; files?: Entry[] }>(`/papyrus/cloud/files/${prov}` + qs({ ...(folder_id ? { folder_id } : {}), path }), false),
   screenState: (sg?: Sig) => get<ScreenState>('/kiosk/screen', true, sg),
   screen: (on: boolean) => post<unknown>(`/kiosk/screen/${on ? 'on' : 'off'}`, undefined, true),
+}
+export const list = <T,>(d: any): T[] => (Array.isArray(d) ? d : d?.items ?? d?.providers ?? d?.entries ?? d?.files ?? [])
+export const dl = {
+  smb: (share: string, path: string) => `/papyrus/smb/download/${share}` + qs({ path }),
+  cloud: (prov: string, path: string, file_id = '') => `/papyrus/cloud/download/${prov}` + qs({ path, ...(file_id ? { file_id } : {}) }),
 }
 export const thumbs = {
   scan: (id: string) => `/papyrus/scans/${id}/thumbnail`,

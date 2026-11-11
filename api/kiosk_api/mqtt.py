@@ -15,6 +15,7 @@ BUTTONS = {  # object -> (name, device_class, entity_category)
     "reload": ("Reload", None, None),
     "restart": ("Restart", "restart", None),
     "reboot": ("Reboot", "restart", "config"),
+    "lock": ("Lock", None, None),
 }
 SENSORS = [  # object, name, device_class, unit, category
     ("cpu_temp", "CPU temperature", "temperature", "°C", "diagnostic"),
@@ -29,7 +30,7 @@ SENSORS = [  # object, name, device_class, unit, category
 def topics(s: Settings) -> dict[str, str]:
     b = f"pi-kiosk/{s.kiosk_id}"
     return {"avail": f"{b}/availability", "screen": f"{b}/screen/state", "screen_set": f"{b}/screen/set",
-            "stats": f"{b}/stats", "update": f"{b}/update/state", "update_install": f"{b}/update/install",
+            "stats": f"{b}/stats", "update": f"{b}/update/state", "update_install": f"{b}/update/install", "unlock": f"{b}/unlock/state",
             **{k: f"{b}/{k}/press" for k in BUTTONS}}
 
 
@@ -56,6 +57,10 @@ def discovery(s: Settings, brightness_max: int | None) -> dict[str, dict]:
     out.append(ent("binary_sensor", "throttled", "Throttled", state_topic=t["stats"],
                    value_template="{{ 'ON' if value_json.throttled else 'OFF' }}",
                    device_class="problem", entity_category="diagnostic"))
+    out.append(ent("binary_sensor", "locked", "Locked", state_topic=t["unlock"],
+                   value_template="{{ 'ON' if value_json.locked else 'OFF' }}"))
+    out.append(ent("sensor", "unlocked_user", "Unlocked user", state_topic=t["unlock"],
+                   value_template="{{ value_json.user }}"))
     out.append(ent("update", "update", "Software", state_topic=t["update"],
                    command_topic=t["update_install"], payload_install="INSTALL",
                    entity_category="diagnostic"))
@@ -78,7 +83,12 @@ def update_payload(run_dir: str) -> str:
         return json.dumps({"installed_version": None, "latest_version": None})
 
 
-def handle_command(s: Settings, screen: Screen, topic: str, payload: str) -> None:
+def unlock_payload(unlock) -> str:
+    st = unlock.snapshot() if unlock else {"state": "locked"}
+    return json.dumps({"locked": st["state"] != "unlocked", "user": st.get("user", "")})
+
+
+def handle_command(s: Settings, screen: Screen, topic: str, payload: str, unlock=None) -> None:
     t = topics(s)
     try:
         if topic == t["screen_set"]:
@@ -90,6 +100,9 @@ def handle_command(s: Settings, screen: Screen, topic: str, payload: str) -> Non
                 screen.set_brightness(int(d["brightness"]))
             if d.get("state") in ("ON", "OFF"):
                 screen.set_on(d["state"] == "ON")
+        elif topic == t["lock"]:
+            if unlock:
+                unlock.request_lock()
         elif topic == t["reload"]:
             screen.reload()
         elif topic in (t["restart"], t["reboot"]):
@@ -111,10 +124,19 @@ async def publish_stats(client, s: Settings, stats: Stats):
     await client.publish(t["update"], update_payload(s.run_dir))
 
 
-async def session(client, s: Settings, screen: Screen, stats: Stats):
+async def session(client, s: Settings, screen: Screen, stats: Stats, unlock=None):
     t = topics(s)
     changed = asyncio.Event()
     screen.listeners.append(changed.set)
+    unlock_changed = asyncio.Event()
+    if unlock:
+        unlock.listeners.append(unlock_changed.set)
+
+    async def push_unlock():
+        while True:
+            await unlock_changed.wait()
+            unlock_changed.clear()
+            await client.publish(t["unlock"], unlock_payload(unlock), retain=True)
 
     async def push():
         while True:
@@ -134,36 +156,46 @@ async def session(client, s: Settings, screen: Screen, stats: Stats):
         await publish_discovery(client, s, screen)
         await client.publish(t["avail"], "online", retain=True)
         await client.publish(t["screen"], screen_payload(screen), retain=True)
+        await client.publish(t["unlock"], unlock_payload(unlock), retain=True)
         try:
             async with asyncio.TaskGroup() as tg:
                 tg.create_task(push())
                 tg.create_task(loop_stats())
+                tg.create_task(push_unlock())
                 async for m in client.messages:
                     payload = m.payload.decode() if isinstance(m.payload, (bytes, bytearray)) else str(m.payload)
                     if str(m.topic) == f"{s.mqtt_discovery_prefix}/status":
                         if payload == "online":
                             await publish_discovery(client, s, screen)
                     else:
-                        handle_command(s, screen, str(m.topic), payload)
+                        handle_command(s, screen, str(m.topic), payload, unlock)
         finally:
             with contextlib.suppress(Exception, asyncio.CancelledError):
                 await asyncio.shield(client.publish(t["avail"], "offline", retain=True))
     finally:
         screen.listeners.remove(changed.set)
+        if unlock:
+            unlock.listeners.remove(unlock_changed.set)
 
 
-async def run(s: Settings, screen: Screen, stats: Stats):
+def tls_params(s: Settings) -> aiomqtt.TLSParameters | None:
+    if not s.mqtt_tls:
+        return None
+    return aiomqtt.TLSParameters(ca_certs=s.mqtt_ca_file or None)
+
+
+async def run(s: Settings, screen: Screen, stats: Stats, unlock=None):
     delay = 1
     while True:
         try:
             async with aiomqtt.Client(
                 s.mqtt_host, s.mqtt_port, username=s.mqtt_username or None,
                 password=s.mqtt_password or None,
-                tls_params=aiomqtt.TLSParameters() if s.mqtt_tls else None,
+                tls_params=tls_params(s), tls_insecure=s.mqtt_tls and s.mqtt_tls_insecure,
                 will=aiomqtt.Will(topics(s)["avail"], "offline", retain=True),
             ) as client:
                 delay = 1
-                await session(client, s, screen, stats)
+                await session(client, s, screen, stats, unlock)
         except asyncio.CancelledError:
             raise
         except (aiomqtt.MqttError, ExceptionGroup, OSError) as e:

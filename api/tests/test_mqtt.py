@@ -29,7 +29,7 @@ def test_discovery(env):
     assert d["homeassistant/button/k1/reboot/config"]["entity_category"] == "config"
     assert d["homeassistant/sensor/k1/boot_time/config"]["device_class"] == "timestamp"
     assert d["homeassistant/update/k1/update/config"]["payload_install"]
-    assert len(d) == 1 + 3 + 6 + 1 + 1
+    assert len(d) == 1 + 4 + 6 + 1 + 2 + 1
     assert "brightness_scale" not in mqtt.discovery(s, None)["homeassistant/light/k1/screen/config"]
 
 
@@ -68,7 +68,7 @@ async def test_publish_discovery(env):
     s, scr, _ = env
     c = Fake()
     await mqtt.publish_discovery(c, s, scr)
-    assert len(c.pub) == 12 and all(r for _, _, r in c.pub)
+    assert len(c.pub) == 15 and all(r for _, _, r in c.pub)
 
 
 def test_non_dict_payload(env):
@@ -103,3 +103,13 @@ async def test_session_publishes_offline_on_cancel(env):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert c.pub[-1] == (mqtt.topics(s)["avail"], "offline", True)
+
+
+def test_tls_params():
+    s = Settings()
+    assert mqtt.tls_params(s) is None
+    s = Settings(mqtt_tls=True)
+    assert mqtt.tls_params(s).ca_certs is None
+    s = Settings(mqtt_tls=True, mqtt_ca_file="/certs/ca.pem")
+    assert mqtt.tls_params(s).ca_certs == "/certs/ca.pem"
+    assert s.mqtt_tls_insecure is False

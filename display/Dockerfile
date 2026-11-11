@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libgl1-mesa-dri mesa-vulkan-drivers xwayland \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd -r -u 10002 -m -d /home/kiosk kiosk
+COPY kiosk-policy.json /etc/chromium/policies/managed/kiosk.json
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]

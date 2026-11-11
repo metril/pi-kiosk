@@ -27,23 +27,38 @@ Three containers (`compose.yaml`):
 Set in `.env` (see `.env.example`):
 - `BACKLIGHT_DEVICE` (varies by screen/kernel, e.g. `10-0045`, `rpi_backlight`; `host/setup.sh` detects it): entry in `/sys/class/backlight`; only that device is mounted into `kiosk-api` (Docker does not follow the sysfs symlinks). `host/setup.sh` installs `99-backlight.rules` so `bl_power` is writable by the non-root api user.
 - Scan destinations, exposed via `GET /kiosk/config`: `SCAN_PAPERLESS` (default `true`), `SCAN_SMB_SHARE_ID` + `SCAN_SMB_PATH`, `SCAN_CLOUD_PROVIDER_ID`, `SCAN_EMAIL_TO`. Empty values disable that destination.
+- Unlock: the kiosk is locked by default (scan, copy, labels, queue). Send-to, share/cloud browsing, remote print and delete need a phone sign-in: `POST /kiosk/unlock/start` shows a QR (Papyrus device grant, needs Papyrus with `/auth/device/*`) and the minted per-user token stays in `kiosk-api` memory only. It is revoked on lock, after `UNLOCK_IDLE_S` idle (default 120), after `UNLOCK_MAX_S` (default 900) or on restart. `PAPYRUS_PUBLIC_URL` (e.g. `https://<papyrus-host>`) rewrites the QR host. Locked proxy calls return `401 {"detail":"locked"}`. Requires Papyrus 1.5.0+ (device grant). Give the shared `PAPYRUS_TOKEN` only `print`, `scan`, `device`; unlocked actions use the per-user token.
+- Email goes only to `KIOSK_CONTACTS` (JSON `[{id,name,email}]`, ids only exposed to the UI). `KIOSK_PRESETS` (JSON) defines scan presets; `SCAN_*` remain as the implicit `default` preset. Both, plus unlock timings, appear in `GET /kiosk/config`.
+- Endpoints: `/kiosk/unlock/{start,state,touch}`, `/kiosk/lock`, `/kiosk/send`, `/kiosk/send/email`, `/kiosk/print/remote`, `/kiosk/print/scan/{id}`.
 
 ## Home Assistant
 
 Optional, via MQTT discovery (no inbound port). Set `MQTT_HOST` (plus `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TLS`, `MQTT_DISCOVERY_PREFIX`, `KIOSK_ID`, `KIOSK_NAME`, `STATS_INTERVAL`; see `.env.example`) and `docker compose up -d`. Empty `MQTT_HOST` disables it. Re-run `sudo ./host/setup.sh` once so the host units and `/run/pi-kiosk` exist.
 
-Entities: screen light (on/off, brightness if supported), buttons (reload page, restart kiosk, reboot Pi), sensors (CPU temp, CPU %, memory %, disk %, load, boot time), throttled binary sensor, and an `update` entity for the images.
+Entities: screen light (on/off, brightness if supported), buttons (reload page, restart kiosk, reboot Pi), sensors (CPU temp, CPU %, memory %, disk %, load, boot time), throttled binary sensor, a `Locked` binary sensor, an `Unlocked user` sensor and a `Lock` button (force-lock), and an `update` entity for the images.
+
+TLS: set `MQTT_TLS=true`, and `MQTT_CA_FILE` (path inside the container, mount it) for a private CA. `MQTT_TLS_INSECURE=true` skips the hostname check; avoid it.
 
 Security: command topics can reboot the Pi. Give the kiosk's MQTT user its own credentials and an ACL that lets only this client (and HA) publish to `<KIOSK_ID>` command topics.
+
+Mosquitto ACL example (kiosk user limited to its own prefix plus discovery; `KIOSK_ID=kiosk`):
+
+```
+user kiosk
+topic readwrite pi-kiosk/kiosk/#
+topic readwrite homeassistant/#
+```
 
 Updating: press Install on the HA update entity (checked hourly by `pi-kiosk-update-check.timer`), or manually: `docker compose pull && docker compose up -d`.
 
 ## Tokens
 
 - Label maker: Settings -> API keys, create a key with scope `write` (`lm_...`) -> `LABELMAKER_TOKEN`. Only needed when the label app runs with `AUTH_MODE=oidc`; leave empty with `AUTH_MODE=none` (no auth).
-- Papyrus: Settings -> API Tokens, permissions `print` + `scan` (plus `email`/`files` for scan send-to) -> `PAPYRUS_TOKEN`.
+- Papyrus: Settings -> API Tokens, permissions `print`, `scan`, `device` only (no `email`/`files`; those use the per-user phone sign-in token, Papyrus 1.5.0+) -> `PAPYRUS_TOKEN`.
 
 ## Bridge pairing
+
+The bridge port is published only on `BRIDGE_BIND` (required in `.env`; compose refuses to start without it). Set it to the Pi's LAN IP so the label app can reach `<pi-host>:9177`, or `127.0.0.1` if the app runs on the Pi. Never `0.0.0.0`.
 
 ```bash
 docker compose run --rm -T labelmaker-bridge python -m labelmaker.driver.bridge show-cert

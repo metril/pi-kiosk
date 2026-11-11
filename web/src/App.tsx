@@ -1,5 +1,5 @@
 import { useCallback, useState, useSyncExternalStore } from 'react'
-import { Home as HomeI, Tag, ScanLine, Copy as CopyI, ListOrdered, WifiOff } from 'lucide-react'
+import { Home as HomeI, FolderOpen, Tag, ScanLine, Copy as CopyI, ListOrdered, WifiOff } from 'lucide-react'
 import { offlineStore, setErrorHandler } from './api'
 import { ToastHost } from './components/ui'
 import { useBusy } from './store'
@@ -10,12 +10,15 @@ import Labels from './screens/Labels'
 import Scan from './screens/Scan'
 import CopyScreen from './screens/Copy'
 import Queue from './screens/Queue'
+import Files from './screens/Files'
+import { UnlockModal, SessionChip } from './components/Unlock'
 
 const TABS = [
   { id: 'home', label: 'Home', icon: HomeI },
   { id: 'labels', label: 'Labels', icon: Tag },
   { id: 'scan', label: 'Scan', icon: ScanLine },
   { id: 'copy', label: 'Copy', icon: CopyI },
+  { id: 'files', label: 'Files', icon: FolderOpen },
   { id: 'queue', label: 'Queue', icon: ListOrdered },
 ] as const
 export type TabId = (typeof TABS)[number]['id']
@@ -42,8 +45,11 @@ export default function App() {
           {tab === 'labels' && <Labels />}
           {tab === 'scan' && <Scan />}
           {tab === 'copy' && <CopyScreen />}
+          {tab === 'files' && <Files />}
           {tab === 'queue' && <Queue />}
         </main>
+        <SessionChip />
+        <UnlockModal />
         <Idle />
       </div>
     </ToastHost>

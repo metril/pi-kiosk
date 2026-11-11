@@ -41,7 +41,8 @@ done
 # cage must not be exec'd so the TERM trap can stop seatd too; wait is interruptible.
 setpriv --reuid=kiosk --regid=kiosk --groups="${GROUPS_CSV:-$(id -g kiosk)}" \
   cage -s -- chromium --kiosk --ozone-platform=wayland --noerrdialogs \
-  --disable-pinch --overscroll-history-navigation=0 \
+  --overscroll-history-navigation=0 --disable-session-crashed-bubble \
+  --disable-dev-tools --disable-extensions --disable-translate \
   --disable-features=Translate --no-first-run \
   --user-data-dir=/tmp/chromium --password-store=basic \
   --check-for-update-interval=31536000 --no-sandbox \

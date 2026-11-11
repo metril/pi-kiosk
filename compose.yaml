@@ -6,7 +6,7 @@ services:
     restart: unless-stopped
     command: ["python", "-m", "labelmaker.driver.bridge", "serve"]
     ports:
-      - "9177:9177"
+      - "${BRIDGE_BIND:?set BRIDGE_BIND in .env to the Pi LAN IP (not 0.0.0.0)}:9177:9177"
     volumes:
       # Whole USB tree, not a single device node: node paths renumber on replug.
       - /dev/bus/usb:/dev/bus/usb
