@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { Home as HomeI, FolderOpen, Tag, ScanLine, Copy as CopyI, ListOrdered, WifiOff } from 'lucide-react'
 import { api, offlineStore, setErrorHandler } from './api'
 import { ToastHost, HdrCtx } from './components/ui'
-import { useBusy } from './store'
+import { useBusy, useAsleep } from './store'
+import { useStatusPoller } from './status'
 import { Spinner } from './components/ui'
 import Idle from './components/Idle'
 import Home from './screens/Home'
@@ -33,6 +34,8 @@ export default function App() {
   const unlocked = sess.state === 'unlocked'
   // Track the server session while unlocked (the Lock screen polls its own flow).
   usePoll((sg) => (unlocked ? api.unlockState(sg).then(setSession) : Promise.resolve()), 5000)
+  const asleep = useAsleep()
+  useStatusPoller(unlocked && !asleep)
   useEffect(() => { if (!unlocked) setTab('home') }, [unlocked])
   const offline = useSyncExternalStore(offlineStore.sub, offlineStore.get)
   const bind = useCallback((h: Parameters<typeof setErrorHandler>[0]) => { setErrorHandler(h); return () => setErrorHandler(() => {}) }, [])
@@ -61,7 +64,7 @@ export default function App() {
           {TABS.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`flex-1 flex flex-col items-center justify-center text-sm font-semibold border-t-4 ${tab === t.id ? 'bg-bg text-acc border-acc' : 'text-slate-300 border-transparent active:bg-line'}`}>
-              <span className="relative"><t.icon size={24} />{(t.id === 'copy' || t.id === 'scan') && busy[t.id] && <span className="absolute -top-1 -right-2"><Spinner size={14} /></span>}</span>{t.label}
+              <span className="relative"><t.icon size={24} />{(t.id === 'copy' || t.id === 'scan') && busy[t.id] && <span className="absolute -top-1 -right-3 rounded-full bg-panel p-0.5"><Spinner size={16} className="text-acc" /></span>}</span>{t.label}
             </button>
           ))}
         </nav>

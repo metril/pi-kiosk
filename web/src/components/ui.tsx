@@ -66,8 +66,43 @@ export function PinPad({ onSubmit, onCancel, busy, message }: { onSubmit: (pin: 
   )
 }
 
-export function Spinner({ size = 24 }: { size?: number }) {
-  return <span className="inline-block rounded-full border-4 border-line border-t-acc animate-spin" style={{ width: size, height: size }} />
+export function Spinner({ size = 24, className = '', label }: { size?: number; className?: string; label?: string }) {
+  return <span role={label ? 'status' : undefined} aria-label={label} aria-hidden={label ? undefined : true}
+    className={`block shrink-0 aspect-square rounded-full border-current border-t-transparent animate-spin motion-reduce:animate-none ${className}`}
+    style={{ width: size, height: size, borderStyle: 'solid', borderWidth: Math.max(2, Math.round(size / 8)) }} />
+}
+
+/** Full-area "working" state: big spinner, elapsed timer, optional percent bar and two-tap cancel. */
+export function BusyOverlay({ title, line, startedAt, pct, page, hint, onCancel, cancelling }: {
+  title: string; line?: string; startedAt: number; pct?: number | null; page?: number | null; hint?: string
+  onCancel?: () => void; cancelling?: boolean
+}) {
+  const [now, setNow] = useState(Date.now())
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(t) }, [])
+  const sec = Math.max(0, Math.floor((now - startedAt) / 1000))
+  const [armed, setArmed] = useState(false)
+  useEffect(() => { if (!armed) return; const t = setTimeout(() => setArmed(false), 3000); return () => clearTimeout(t) }, [armed])
+  const known = typeof pct === 'number'
+  const sub = [page ? `Page ${page} scanned` : '', known ? `${Math.round(pct!)}%` : ''].filter(Boolean).join(' · ') || hint
+  return (
+    <div className="absolute inset-0 z-20 bg-bg flex flex-col items-center justify-center gap-3 text-center">
+      <Spinner size={96} className="text-acc" />
+      <div role="status" aria-live="polite" className="text-3xl font-bold leading-none">{cancelling ? 'Cancelling…' : title}</div>
+      {line && <div className="text-slate-300 leading-none">{line}</div>}
+      <div className="text-5xl font-bold tabular-nums leading-none">{Math.floor(sec / 60)}:{String(sec % 60).padStart(2, '0')}</div>
+      <div className="w-[480px] max-w-full h-2 rounded-full bg-line overflow-hidden">
+        {known ? <div className="h-full bg-acc transition-[width]" style={{ width: `${Math.min(100, Math.max(0, pct!))}%` }} />
+          : <div className="h-full w-2/5 bg-acc rounded-full animate-indet motion-reduce:animate-none" />}
+      </div>
+      <div className="text-slate-400 leading-none min-h-[16px] tabular-nums">{sub}</div>
+      {onCancel && (
+        <button className={`btn w-[320px] ${armed || cancelling ? 'btn-err' : ''}`} disabled={cancelling}
+          onClick={() => (armed ? (setArmed(false), onCancel()) : setArmed(true))}>
+          {cancelling ? 'Cancelling…' : armed ? 'Tap again to cancel' : 'Cancel'}
+        </button>
+      )}
+    </div>
+  )
 }
 
 // Header slots: Title portals the screen title and its right-hand actions into the app header.

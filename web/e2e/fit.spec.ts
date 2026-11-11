@@ -27,7 +27,8 @@ function pdf(pages: number) {
 }
 const SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="90" height="120"><rect width="90" height="120" fill="#fff"/><rect x="10" y="10" width="70" height="8" fill="#333"/></svg>'
 
-async function mock(page: Page, st: { unlocked: boolean }) {
+type St = { unlocked: boolean; live?: boolean; release?: () => void; cancelled?: boolean }
+async function mock(page: Page, st: St) {
   const json = (route: any, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
   await page.route(/\/(papyrus|labels|kiosk)\//, (route) => {
     const u = new URL(route.request().url()); const p = u.pathname; const m = route.request().method()
@@ -37,6 +38,13 @@ async function mock(page: Page, st: { unlocked: boolean }) {
       return json(route, st.unlocked ? { state: 'unlocked', user: 'alexandra.longname', remaining_s: 540, idle_remaining_s: 200 } : { state: 'pending', qr_uri: 'https://auth.example.com/device?c=ABCD1234', user_code: 'ABCD-1234', expires_in: 300 })
     if (p === '/kiosk/unlock/start') return json(route, { state: 'pending', qr_uri: 'https://auth.example.com/device?c=ABCD1234', user_code: 'ABCD-1234', expires_in: 300 })
     if (p === '/kiosk/send') return json(route, { post: {}, results: [{ type: 'cloud', ok: true }, { type: 'smb', ok: true }, { type: 'paperless', ok: false, error: 'Upstream error' }], all_ok: false, deleted: false })
+    if (p === '/kiosk/devices') return json(route, { printer: { state: 3, state_message: 'Idle', accepting_jobs: true, state_reasons: [], markers: [{ name: 'Black', level: 8, color: '#000' }] }, scanner: { available: true, device: 'x', busy: false }, printer_stale: false, scanner_stale: false, printer_age_s: 0, scanner_age_s: 0 })
+    if (p === '/papyrus/scans' && m === 'POST') {
+      if (!st.live) return json(route, { ...scans[0], status: 'completed' })
+      return new Promise<void>((res) => { st.release = () => { json(route, { detail: 'Scan cancelled', code: 'scan_cancelled' }, 409); res() } })
+    }
+    if (p === '/papyrus/scans/live/cancel') { st.cancelled = true; setTimeout(() => st.release?.(), 1200); return json(route, { status: 'cancelling' }, 202) }
+    if (p === '/papyrus/scans' && st.live) return json(route, { items: [{ ...scans[0], id: 99, scan_id: 'live', status: 'scanning', page_count: 2, progress_pct: 40, created_at: new Date().toISOString() }, ...scans], total: 11, limit: 10, offset: 0 })
     if (p === '/kiosk/status') return json(route, { printer_ready: true, scanner_ready: false })
     if (p === '/kiosk/screen') return json(route, { on: true, brightness: null, max: null, reload_seq: 0 })
     if (p === '/papyrus/printers/default/status') return json(route, { state: 3, state_message: 'Idle', accepting_jobs: true, state_reasons: [], markers: [{ name: 'Black', level: 8, color: '#000' }] })
@@ -136,4 +144,20 @@ test('every screen fits 800x480', async ({ page }) => {
   st.unlocked = false
   await page.waitForSelector('text=ABCD-1234', { timeout: 15000 }); await check(page, '22-lock-screen')
   expect(await page.locator('nav').count()).toBe(0)
+})
+
+test('scan overlay fits 800x480 and cancels with two taps', async ({ page }) => {
+  const st: St = { unlocked: true, live: true }
+  await mock(page, st); page.setDefaultTimeout(6000)
+  await page.goto('/')
+  await tab(page, 'Scan'); await page.waitForSelector('text=Results')
+  await page.locator('button.btn-ok', { hasText: 'Scan' }).click()
+  await page.waitForSelector('text=Page 2 scanned'); await check(page, '23-scan-overlay')
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await page.getByText('Tap again to cancel').waitFor(); await check(page, '24-scan-overlay-armed')
+  await page.getByText('Tap again to cancel').click()
+  await page.getByRole('button', { name: 'Cancelling…' }).waitFor(); await check(page, '25-scan-overlay-cancelling')
+  await page.getByText('Scan cancelled').waitFor()
+  expect(st.cancelled).toBe(true)
+  await page.waitForSelector('text=Page 2 scanned', { state: 'detached' })
 })

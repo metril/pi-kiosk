@@ -33,11 +33,12 @@ ALLOW = {
         "GET": _c(
             "system/health", "printers/default/status", "scanners/default/status",
             "scanners/default/options", "scan-profiles", "scans",
-            "scans/{id}/thumbnail", "scans/{id}/download", "jobs", "jobs/{id}/thumbnail",
+            "scans/{id}", "scans/{id}/thumbnail", "scans/{id}/download", "copy/{id}", "jobs", "jobs/{id}/thumbnail",
             "smb/shares", "smb/browse/{id}", "smb/download/{id}", "cloud/providers",
             "cloud/files/{id}", "cloud/download/{id}", "email/config",
         ),
-        "POST": _c("scans", "copy", "jobs/{id}/release", "jobs/{id}/cancel",
+        "POST": _c("scans", "copy", "scans/{id}/cancel", "copy/{id}/cancel",
+                   "jobs/{id}/release", "jobs/{id}/cancel",
                    "scans/{id}/(?:smb|cloud|paperless|ocr|enhance|backs)",
                    "scans/collate", "jobs/upload"),
         "DELETE": _c("scans/{id}"),
@@ -117,6 +118,38 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if old:
             await old.aclose()
 
+    devices: dict = {k: {"data": None, "at": None, "stale": False} for k in ("printer", "scanner")}
+    devices_tried = {"v": False}
+    dev_lock = asyncio.Lock()
+
+    async def refresh_devices():
+        """Probe printer+scanner once; a failed probe keeps that device's last value and marks it stale."""
+        async with dev_lock:
+            rs = await asyncio.gather(pcall("GET", "printers/default/status"),
+                                      pcall("GET", "scanners/default/status"))
+            for key, r in zip(("printer", "scanner"), rs):
+                try:
+                    d = r.json() if r is not None and r.is_success else None
+                except ValueError:
+                    d = None
+                dv = devices[key]
+                if isinstance(d, dict):
+                    dv.update(data=d, at=time.time(), stale=False)
+                else:
+                    dv["stale"] = True
+            devices_tried["v"] = True
+
+    async def status_loop():
+        while True:
+            try:
+                await asyncio.sleep(15)
+            except asyncio.CancelledError:
+                raise
+            try:
+                await refresh_devices()
+            except Exception:  # keep polling whatever happens
+                log.exception("device refresh failed")
+
     async def cache_loop():
         while True:
             if store.current():
@@ -154,6 +187,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             bg = [asyncio.create_task(unlock.reaper())]
             if base.papyrus_token:
                 bg.append(asyncio.create_task(cache_loop()))
+                bg.append(asyncio.create_task(status_loop()))
             try:
                 yield
             finally:
@@ -177,6 +211,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.started, app.state.last_papyrus = started, last_papyrus
     app.state.call = pcall
     app.state.refresh = lambda: refresh_cache(store, pcall)
+    app.state.refresh_devices = refresh_devices
 
     @app.get("/kiosk/config")
     async def config():
@@ -202,18 +237,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         }
 
+    async def ensure_devices():
+        if not devices_tried["v"]:
+            await refresh_devices()
+
+    @app.get("/kiosk/devices")
+    async def kiosk_devices():
+        """Cached printer/scanner status (refreshed every 15 s in the background)."""
+        if not unlock.active():
+            return locked()
+        await ensure_devices()
+        now = time.time()
+        out = {}
+        for k, dv in devices.items():
+            out[k] = dv["data"]
+            out[f"{k}_stale"] = dv["stale"]
+            out[f"{k}_age_s"] = None if dv["at"] is None else max(0, int(now - dv["at"]))
+        return out
+
     @app.get("/kiosk/status")
     async def kiosk_status():
         """Locked-screen readiness: two booleans via the shared token, nothing else."""
-        pr, sc = await asyncio.gather(pcall("GET", "printers/default/status"),
-                                      pcall("GET", "scanners/default/status"))
-
-        def js(r):
-            try:
-                return r.json() if r is not None and r.is_success else {}
-            except ValueError:
-                return {}
-        p, c = js(pr), js(sc)
+        await ensure_devices()
+        p, c = devices["printer"]["data"] or {}, devices["scanner"]["data"] or {}
         return {"printer_ready": bool(p and p.get("accepting_jobs") and p.get("state") != 5),
                 "scanner_ready": bool(c.get("available") and not c.get("busy"))}
 
@@ -546,6 +592,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             tok.strip().lower()
             for v in r.headers.get_list("connection") for tok in v.split(",") if tok.strip()
         }
+        if name == "papyrus" and method == "POST" and path in ("scans", "copy"):
+            try:
+                await refresh_devices()  # clear "Busy" before the client re-reads status
+            except Exception:
+                log.exception("device refresh failed")
         resp = Response(r.content, r.status_code)
         for k, v in r.headers.multi_items():
             if k.lower() not in drop:

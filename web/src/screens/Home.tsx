@@ -1,10 +1,12 @@
 import type { ReactNode } from 'react'
 import { useState } from 'react'
 import { Printer, ScanLine, Tag, Pause, FolderOpen, Smartphone, FileText, Receipt, Image, Book, Mail, Folder, Archive, type LucideIcon } from 'lucide-react'
-import { api, ApiError, type KioskPreset } from '../api'
-import { usePoll } from '../hooks'
-import { Title, Pager, Spinner, useToast, errMsg } from '../components/ui'
-import { useConfig, setBusy, isBusy } from '../store'
+import { api, type KioskPreset } from '../api'
+import { Title, Pager, Spinner, useToast } from '../components/ui'
+import { useConfig, setBusy, startBusy, patchBusyInfo, getBusyInfo, isBusy } from '../store'
+import { useStatus, staleText, refreshStatus } from '../status'
+import { failMsg } from '../progress'
+import JobOverlay from '../components/JobOverlay'
 import { Qr } from '../components/Unlock'
 import type { TabId } from '../App'
 
@@ -40,16 +42,16 @@ function Tile({ icon, title, lvl, text, sub, onClick }: { icon: ReactNode; title
 }
 
 export default function Home({ go }: { go: (t: TabId) => void }) {
-  const pr = usePoll(api.printerStatus, 10000)
-  const sc = usePoll(api.scannerStatus, 10000)
-  const lb = usePoll(api.labelStatus, 10000)
-  const held = usePoll(api.heldJobs, 10000)
+  const st = useStatus()
+  const pr = { data: st.devices?.printer ?? null, error: st.err.devices && !st.devices }
+  const sc = { data: st.devices?.scanner ?? null, error: st.err.devices && !st.devices }
+  const lb = { data: st.labels, error: st.err.labels && !st.labels }
 
   let p: [Lvl | null, string, string?] = [null, 'Checking…']
   if (pr.data) {
     const d = pr.data
     p = d.state === 5 ? ['err', 'Stopped', d.state_message] : !d.accepting_jobs ? ['warn', 'Not accepting', d.state_message] : d.state === 4 ? ['ok', 'Printing'] : ['ok', 'Ready']
-    const low = d.markers.filter((m) => m.level >= 0 && m.level <= 10)[0]
+    const low = (d.markers ?? []).filter((m) => m.level >= 0 && m.level <= 10)[0]
     if (low && p[0] === 'ok') p = ['warn', p[1], `${low.name} low (${low.level}%)`]
   } else if (pr.error) p = ['err', 'Unreachable']
 
@@ -65,25 +67,31 @@ export default function Home({ go }: { go: (t: TabId) => void }) {
       : d.connected && !d.error_code ? ['ok', 'Ready'] : ['err', 'Problem', friendly ?? d.error ?? 'Not connected']
   } else if (lb.error) l = ['err', 'Unreachable']
 
-  const n = held.data?.total
+  const n = st.held ?? undefined
   const cfg = useConfig(), toast = useToast()
   const [running, setRunning] = useState<string | null>(null)
   const [qr, setQr] = useState(false)
   const run = async (p: KioskPreset) => {
     if (running || isBusy('scan')) return
-    setRunning(p.id); setBusy('scan', true)
+    const sc = { resolution: 300, mode: 'Color', format: 'pdf', source: 'Flatbed', ...(p.scan ?? {}) }
+    setRunning(p.id); startBusy('scan', { title: p.label ?? p.id, line: `${sc.source} · ${sc.resolution} dpi · ${sc.mode}` })
     try {
-      const sc = p.scan ?? {}
-      const s = await api.startScan({ resolution: 300, mode: 'Color', format: 'pdf', source: 'Flatbed', ...sc })
+      const s = await api.startScan(sc)
       if (s.status === 'failed') return toast(s.error_message || 'Scan failed')
+      if (s.status === 'cancelled') return toast('Scan cancelled', 'ok')
       if (!p.targets.length) return toast('Scanned', 'ok')
+      const names = [...new Set(p.targets.map((t) => ({ paperless: 'Paperless', smb: 'share', cloud: 'cloud', email: 'email' })[t.type] ?? t.type))].join(', ')
+      patchBusyInfo('scan', { line: `Sending to ${names}`, sending: true })
       const r = await api.send({ scan_id: s.scan_id, targets: p.targets, post: p.post, delete_after: p.delete_after })
       toast(r.all_ok ? 'Scanned and sent' : 'Scanned, but some steps failed', r.all_ok ? 'ok' : 'err')
-    } catch (e) { if (!(e instanceof ApiError)) toast(errMsg(e)) } finally { setRunning(null); setBusy('scan', false) }
+    } catch (e) {
+      const m = failMsg(e, 'Scan', !!getBusyInfo('scan')?.cancelling)
+      if (m) toast(m, m === 'Scan cancelled' ? 'ok' : 'err')
+    } finally { setRunning(null); setBusy('scan', false); refreshStatus() }
   }
   const tiles: ReactNode[] = [
-    <Tile key="pr" icon={<Printer />} title="Printer" lvl={p[0]} text={p[1]} sub={p[2]} />,
-    <Tile key="sc" icon={<ScanLine />} title="Scanner" lvl={s[0]} text={s[1]} />,
+    <Tile key="pr" icon={<Printer />} title="Printer" lvl={p[0]} text={p[1]} sub={p[2] ?? staleText(st, 'printer')} />,
+    <Tile key="sc" icon={<ScanLine />} title="Scanner" lvl={s[0]} text={s[1]} sub={staleText(st, 'scanner')} />,
     ...(cfg?.presets ?? []).map((p) => {
       const Ico = PRESET_ICONS[p.icon ?? ''] ?? ScanLine
       return (
@@ -102,6 +110,7 @@ export default function Home({ go }: { go: (t: TabId) => void }) {
     <div className="h-full flex flex-col relative">
       <Title>Home</Title>
       <Pager items={tiles} cols={4} rows={3} className="flex-1" />
+      <JobOverlay kind="scan" />
       {qr && cfg?.public_url && (
         <div className="fixed inset-0 z-30 bg-black/90 flex items-center justify-center" onClick={() => setQr(false)}>
           <div className="bg-panel border border-line rounded-2xl p-4 flex items-center gap-4">

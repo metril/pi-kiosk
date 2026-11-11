@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Play, Lock } from 'lucide-react'
 import { api, ApiError, type Job } from '../api'
 import { usePoll } from '../hooks'
+import { refreshStatus } from '../status'
 import { ConfirmBtn, PinPad, Title, useToast, errMsg } from '../components/ui'
 
 export default function Queue() {
@@ -16,14 +17,14 @@ export default function Queue() {
     setBusy(true)
     try {
       await api.release(j.id, pin)
-      toast('Released', 'ok'); setPinFor(null); setPinMsg(''); q.refresh()
+      toast('Released', 'ok'); setPinFor(null); setPinMsg(''); q.refresh(); refreshStatus()
     } catch (e) {
       if (e instanceof ApiError && e.status === 403) { setPinFor(j); setPinMsg(pin ? 'Wrong PIN' : '') }
       else if (e instanceof ApiError && e.status === 429) { setPinFor(null); toast('Too many attempts. Try again in a few minutes.') }
       else toast(errMsg(e))
     } finally { setBusy(false) }
   }
-  const cancel = async (j: Job) => { try { await api.cancelJob(j.id); q.refresh() } catch { /* toast shown */ } }
+  const cancel = async (j: Job) => { try { await api.cancelJob(j.id); q.refresh(); refreshStatus() } catch { /* toast shown */ } }
   const jobs = q.data?.items ?? []
   return (
     <div className="h-full flex flex-col relative">

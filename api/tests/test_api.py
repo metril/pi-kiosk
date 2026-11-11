@@ -250,9 +250,42 @@ async def test_locked_status_only_two_booleans(locked_client):
     r = await locked_client.get("/kiosk/status")
     assert r.json() == {"printer_ready": True, "scanner_ready": True}
     assert pr.calls[0].request.headers["authorization"] == "Bearer PTOK"
-    respx.get(f"{P}/api/v1/scanners/default/status").respond(500)
+    assert len(pr.calls) == 1
+    # served from the cache: a later upstream change shows only after a refresh
+    sc = respx.get(f"{P}/api/v1/scanners/default/status").respond(
+        200, json={"available": False, "busy": False})
+    assert (await locked_client.get("/kiosk/status")).json()["scanner_ready"] is True
+    assert len(sc.calls) == 1
+    await locked_client._transport.app.state.refresh_devices()
     assert (await locked_client.get("/kiosk/status")).json() == {
         "printer_ready": True, "scanner_ready": False}
+
+
+@respx.mock
+async def test_devices_cached_and_stale(client, locked_client):
+    assert (await locked_client.get("/kiosk/devices")).status_code == 401
+    pr = respx.get(f"{P}/api/v1/printers/default/status").respond(200, json={"state": 3})
+    sc = respx.get(f"{P}/api/v1/scanners/default/status").respond(
+        200, json={"available": True, "busy": False})
+    d = (await client.get("/kiosk/devices")).json()
+    assert d["printer"] == {"state": 3} and d["printer_stale"] is False and d["printer_age_s"] == 0
+    await client.get("/kiosk/devices")
+    assert len(pr.calls) == 1 and len(sc.calls) == 1  # second read is cache-only
+    sc.respond(500)
+    await client._transport.app.state.refresh_devices()
+    d = (await client.get("/kiosk/devices")).json()
+    assert d["scanner_stale"] is True and d["scanner"] == {"available": True, "busy": False}
+    assert d["printer_stale"] is False and d["printer"] == {"state": 3}
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/papyrus/scans/s-1"), ("POST", "/papyrus/scans/s-1/cancel"),
+    ("GET", "/papyrus/copy/c-1"), ("POST", "/papyrus/copy/c-1/cancel")])
+@respx.mock
+async def test_progress_cancel_allowed(client, method, path):
+    r = respx.route(method=method, url=f"{P}/api/v1{path[len('/papyrus'):]}").respond(
+        200, json={"progress_pct": 40})
+    assert (await client.request(method, path)).status_code == 200 and r.called
 
 
 async def test_admin_html_not_served_via_path_variants(env):
@@ -264,3 +297,12 @@ async def test_admin_html_not_served_via_path_variants(env):
             r = await c.get(p)
             assert "ADMIN" not in r.text and "root:" not in r.text, p
         assert (await c.get("/a.js")).text == "js"
+
+
+@respx.mock
+async def test_post_scan_refreshes_devices(client):
+    respx.post(f"{P}/api/v1/scans").respond(200, json={})
+    sc = respx.get(f"{P}/api/v1/scanners/default/status").respond(200, json={"busy": False})
+    respx.get(f"{P}/api/v1/printers/default/status").respond(200, json={})
+    await client.post("/papyrus/scans")
+    assert len(sc.calls) == 1

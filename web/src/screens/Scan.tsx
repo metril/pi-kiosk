@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
 import { ScanLine, Send as SendI, X, FileText, Eye, Printer, Trash2 } from 'lucide-react'
-import { api, thumbs, ApiError, type Scan, type ScanProfile } from '../api'
+import { api, thumbs, type Scan, type ScanProfile } from '../api'
 import { usePoll } from '../hooks'
-import { setBusy as setB, isBusy, useBusy } from '../store'
+import { setBusy as setB, startBusy, isBusy, useBusy, getBusyInfo } from '../store'
+import { refreshStatus } from '../status'
+import { failMsg } from '../progress'
+import JobOverlay from '../components/JobOverlay'
 import SendPanel from '../components/Send'
 import Viewer from '../components/Viewer'
-import { Spinner, Title, Pager, useToast, errMsg, ConfirmBtn } from '../components/ui'
+import { Spinner, Title, Pager, useToast, ConfirmBtn } from '../components/ui'
 
 function Cycle({ label, value, opts, onChange }: { label: string; value: string | number; opts: (string | number)[]; onChange: (v: any) => void }) {
   const next = () => { if (opts.length) onChange(opts[(opts.indexOf(value) + 1) % opts.length]) }
@@ -35,7 +38,7 @@ export default function ScanScreen() {
 
   const scan = async () => {
     if (isBusy('scan')) return
-    setB('scan', true)
+    startBusy('scan', { title: 'Scanning…', line: `${src} · ${res} dpi · ${mode}` })
     try {
       let s = await api.startScan({ resolution: res, mode, format: src === 'ADF' ? 'pdf' : fmt, source: src })
       // POST /scans is synchronous; poll defensively in case a server returns early.
@@ -44,9 +47,13 @@ export default function ScanScreen() {
         s = (await api.scans(10)).items.find((x) => x.scan_id === s.scan_id) ?? s
       }
       if (s.status === 'failed') toast(s.error_message || 'Scan failed')
+      else if (s.status === 'cancelled') toast('Scan cancelled', 'ok')
       else { toast(`Scanned ${s.page_count} page${s.page_count === 1 ? '' : 's'}`, 'ok'); setAct(s) }
       scans.refresh()
-    } catch (e) { if (!(e instanceof ApiError)) toast(errMsg(e)) } finally { setB('scan', false) }
+    } catch (e) {
+      const m = failMsg(e, 'Scan', !!getBusyInfo('scan')?.cancelling)
+      if (m) toast(m, m === 'Scan cancelled' ? 'ok' : 'err')
+    } finally { setB('scan', false); refreshStatus() }
   }
   const print = async (s: Scan) => {
     setPb(true)
@@ -83,6 +90,7 @@ export default function ScanScreen() {
           </div>
         ))}
       </div>
+      {busy && <JobOverlay kind="scan" />}
       {viewing && <Viewer src={`/papyrus/scans/${viewing.scan_id}/download`} title={`Scan ${viewing.page_count}p ${viewing.format}`} onClose={() => setViewing(null)} />}
       {sendFor && <SendPanel scanId={sendFor.scan_id} onClose={() => setSendFor(null)} onDeleted={scans.refresh} />}
       {act && (

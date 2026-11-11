@@ -1,7 +1,7 @@
 import { useEffect, useSyncExternalStore } from 'react'
 import { api, type KioskConfig } from './api'
 
-function makeStore<S>(init: S) {
+export function makeStore<S>(init: S) {
   let state = init
   const ls = new Set<() => void>()
   return {
@@ -14,7 +14,14 @@ function makeStore<S>(init: S) {
 /** In-flight long operations; survive tab switches. */
 export type BusyKey = 'copy' | 'scan'
 const busy = makeStore<Record<BusyKey, boolean>>({ copy: false, scan: false })
-export const setBusy = (k: BusyKey, v: boolean) => busy.set({ ...busy.get(), [k]: v })
+/** Details of the running job (overlay title, settings, timer, copy id, cancel state). */
+export interface BusyInfo { title: string; line?: string; startedAt: number; copyId?: string; sending?: boolean; cancelling?: boolean }
+const infos = makeStore<Partial<Record<BusyKey, BusyInfo>>>({})
+export const useBusyInfo = () => useSyncExternalStore(infos.sub, infos.get)
+export const getBusyInfo = (k: BusyKey) => infos.get()[k]
+export const patchBusyInfo = (k: BusyKey, p: Partial<BusyInfo>) => { const c = infos.get()[k]; if (c) infos.set({ ...infos.get(), [k]: { ...c, ...p } }) }
+export const startBusy = (k: BusyKey, i: Omit<BusyInfo, 'startedAt'>) => { infos.set({ ...infos.get(), [k]: { ...i, startedAt: Date.now() } }); busy.set({ ...busy.get(), [k]: true }) }
+export const setBusy = (k: BusyKey, v: boolean) => { busy.set({ ...busy.get(), [k]: v }); if (!v) infos.set({ ...infos.get(), [k]: undefined }) }
 export const isBusy = (k: BusyKey) => busy.get()[k]
 export const useBusy = () => useSyncExternalStore(busy.sub, busy.get)
 

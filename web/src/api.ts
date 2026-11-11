@@ -74,9 +74,14 @@ export interface ScannerStatus { available: boolean; device: string | null; busy
 export interface ScanOptions { resolutions: number[]; modes: string[]; formats: string[]; feeder_formats: string[]; sources: string[] }
 export interface ScanProfile { id: number; name: string; resolution: number; color_mode: string; format: string; source: string; ocr_enabled: boolean }
 export interface ScanReq { resolution: number; mode: string; format: string; source: string }
-export interface Scan { id: number; scan_id: string; status: string; resolution: number; mode: string; format: string; source: string; page_count: number; error_message: string | null; created_at: string }
+export interface Scan { id: number; scan_id: string; status: string; resolution: number; mode: string; format: string; source: string; page_count: number; progress_pct?: number | null; error_message: string | null; created_at: string }
 export interface Job { id: number; title: string; status: string; copies: number; duplex: boolean; media: string; has_pin: boolean; source_type: string; created_at: string }
-export interface CopyReq { copies: number; mode: string; duplex: boolean; resolution?: number; source?: string; media?: string }
+export interface CopyStatus { copy_id?: string; phase: 'scanning' | 'printing' | 'done' | 'failed' | 'cancelled'; progress_pct: number | null; scan_id: string | null; job_id: number | null }
+export interface Devices {
+  printer: PrinterStatus | null; scanner: ScannerStatus | null
+  printer_stale: boolean; scanner_stale: boolean; printer_age_s: number | null; scanner_age_s: number | null
+}
+export interface CopyReq { copy_id?: string; copies: number; mode: string; duplex: boolean; resolution?: number; source?: string; media?: string }
 export interface LabelStatus { connected: boolean; error: string | null; error_code: string | null; printer_mode: string }
 export interface Preset { id: string; name: string; favorite: boolean; label_type: string; tape_family: string; tape_width_mm: number | null }
 export interface HistoryItem { id: string; status: string; label_count: number; kind: string; created_at: string; error: string | null; thumbnail_url: string | null }
@@ -115,10 +120,16 @@ export const api = {
   scanOptions: (sg?: Sig) => get<ScanOptions>('/papyrus/scanners/default/options', true, sg),
   profiles: (sg?: Sig) => get<ScanProfile[] | Page<ScanProfile>>('/papyrus/scan-profiles', false, sg),
   scans: (limit = 10, sg?: Sig) => get<Page<Scan>>('/papyrus/scans' + qs({ limit }), true, sg),
-  startScan: (b: ScanReq) => post<Scan>('/papyrus/scans', b),
+  scan: (id: string, sg?: Sig) => get<Scan>(`/papyrus/scans/${id}`, true, sg),
+  // quiet: callers map the 409 scan_cancelled outcome themselves
+  startScan: (b: ScanReq) => post<Scan>('/papyrus/scans', b, true),
+  cancelScan: (id: string) => post<unknown>(`/papyrus/scans/${id}/cancel`, undefined, true),
+  copyStatus: (id: string, sg?: Sig) => get<CopyStatus>(`/papyrus/copy/${id}`, true, sg),
+  cancelCopy: (id: string) => post<unknown>(`/papyrus/copy/${id}/cancel`, undefined, true),
+  devices: (sg?: Sig) => get<Devices>('/kiosk/devices', true, sg),
   sendScan: (id: string, kind: 'smb' | 'email' | 'cloud' | 'paperless', query: Record<string, string | number> = {}, body: unknown = {}) =>
     post<{ message: string }>(`/papyrus/scans/${id}/${kind}${Object.keys(query).length ? qs(query) : ''}`, body),
-  copy: (b: CopyReq) => post<{ message: string }>('/papyrus/copy', b),
+  copy: (b: CopyReq) => post<{ message: string }>('/papyrus/copy', b, true),
   heldJobs: (sg?: Sig) => get<Page<Job>>('/papyrus/jobs' + qs({ status: 'held', limit: 50 }), true, sg),
   // release errors (403 pin / 429) are handled by the caller
   release: (id: number, pin?: string) => post<unknown>(`/papyrus/jobs/${id}/release`, pin ? { pin } : {}, true),
