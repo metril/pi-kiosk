@@ -73,8 +73,8 @@ export function Spinner({ size = 24, className = '', label }: { size?: number; c
 }
 
 /** Full-area "working" state: big spinner, elapsed timer, optional percent bar and two-tap cancel. */
-export function BusyOverlay({ title, line, startedAt, pct, page, hint, onCancel, cancelling }: {
-  title: string; line?: string; startedAt: number; pct?: number | null; page?: number | null; hint?: string
+export function BusyOverlay({ title, line, startedAt, pct, page, hint, note, onCancel, cancelling }: {
+  title: string; line?: string; startedAt: number; pct?: number | null; page?: number | null; hint?: string; note?: string
   onCancel?: () => void; cancelling?: boolean
 }) {
   const [now, setNow] = useState(Date.now())
@@ -83,7 +83,7 @@ export function BusyOverlay({ title, line, startedAt, pct, page, hint, onCancel,
   const [armed, setArmed] = useState(false)
   useEffect(() => { if (!armed) return; const t = setTimeout(() => setArmed(false), 3000); return () => clearTimeout(t) }, [armed])
   const known = typeof pct === 'number'
-  const sub = [page ? `Page ${page} scanned` : '', known ? `${Math.round(pct!)}%` : ''].filter(Boolean).join(' · ') || hint
+  const sub = [page ? `Page ${page}` : '', known ? `${Math.round(pct!)}%` : '', note ?? ''].filter(Boolean).join(' · ') || hint
   return (
     <div className="absolute inset-0 z-20 bg-bg flex flex-col items-center justify-center gap-3 text-center">
       <Spinner size={96} className="text-acc" />

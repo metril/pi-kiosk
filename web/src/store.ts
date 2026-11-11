@@ -15,7 +15,7 @@ export function makeStore<S>(init: S) {
 export type BusyKey = 'copy' | 'scan'
 const busy = makeStore<Record<BusyKey, boolean>>({ copy: false, scan: false })
 /** Details of the running job (overlay title, settings, timer, copy id, cancel state). */
-export interface BusyInfo { title: string; line?: string; startedAt: number; copyId?: string; sending?: boolean; cancelling?: boolean }
+export interface BusyInfo { title: string; line?: string; startedAt: number; copyId?: string; scanId?: string; noCancel?: boolean; sending?: boolean; cancelling?: boolean }
 const infos = makeStore<Partial<Record<BusyKey, BusyInfo>>>({})
 export const useBusyInfo = () => useSyncExternalStore(infos.sub, infos.get)
 export const getBusyInfo = (k: BusyKey) => infos.get()[k]

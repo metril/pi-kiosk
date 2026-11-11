@@ -16,7 +16,10 @@ export default function CopyScreen() {
     if (isBusy('copy')) return
     const copy_id = newId()
     startBusy('copy', { title: 'Copying…', copyId: copy_id, line: `${n} ${n === 1 ? 'copy' : 'copies'} · ${color ? 'Color' : 'Gray'}${duplex ? ' · Duplex' : ''}` })
-    try { await api.copy({ copy_id, copies: n, mode: color ? 'Color' : 'Gray', duplex }); toast('Copy finished', 'ok') }
+    try {
+      const r: any = await api.copy({ copy_id, copies: n, mode: color ? 'Color' : 'Gray', duplex })
+      if (r?.status === 'cancelled' || r?.job?.status === 'cancelled') toast('Copy cancelled', 'ok'); else toast('Copy finished', 'ok')
+    }
     catch (e) {
       const m = failMsg(e, 'Copy', !!getBusyInfo('copy')?.cancelling)
       if (m) toast(m, m === 'Copy cancelled' ? 'ok' : 'err')

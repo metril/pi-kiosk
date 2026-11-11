@@ -4,7 +4,7 @@ import { api, thumbs, type Scan, type ScanProfile } from '../api'
 import { usePoll } from '../hooks'
 import { setBusy as setB, startBusy, isBusy, useBusy, getBusyInfo } from '../store'
 import { refreshStatus } from '../status'
-import { failMsg } from '../progress'
+import { failMsg, newId } from '../progress'
 import JobOverlay from '../components/JobOverlay'
 import SendPanel from '../components/Send'
 import Viewer from '../components/Viewer'
@@ -38,9 +38,10 @@ export default function ScanScreen() {
 
   const scan = async () => {
     if (isBusy('scan')) return
-    startBusy('scan', { title: 'Scanning…', line: `${src} · ${res} dpi · ${mode}` })
+    const scan_id = newId()
+    startBusy('scan', { scanId: scan_id, title: 'Scanning…', line: `${src} · ${res} dpi · ${mode}` })
     try {
-      let s = await api.startScan({ resolution: res, mode, format: src === 'ADF' ? 'pdf' : fmt, source: src })
+      let s = await api.startScan({ scan_id, resolution: res, mode, format: src === 'ADF' ? 'pdf' : fmt, source: src })
       // POST /scans is synchronous; poll defensively in case a server returns early.
       for (let i = 0; s.status === 'scanning' && i < 300; i++) {
         await new Promise((r) => setTimeout(r, 1000))

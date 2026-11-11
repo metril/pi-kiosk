@@ -23,9 +23,12 @@ const pctOf = (v: unknown) => (typeof v === 'number' ? v : null)
 
 /** Polls the running scan (newest 'scanning' item) or copy; supported=false on older Papyrus. */
 export function useJob(kind: BusyKey, info: BusyInfo): Job {
-  const [j, setJ] = useState<Job>(NONE)
+  const [j, setJ] = useState<Job>(info.scanId ? { ...NONE, id: info.scanId, supported: true } : NONE)
   useLoop(!info.sending, 1000, async () => {
-    if (kind === 'scan') {
+    if (kind === 'scan' && info.scanId) {
+      const s = await api.scan(info.scanId)  // 404 until Papyrus registers it: keep last
+      setJ({ id: info.scanId, pct: s.status === 'scanning' ? pctOf(s.progress_pct) : null, page: s.status === 'scanning' && s.page_count > 0 ? s.page_count : null, supported: 'progress_pct' in s })
+    } else if (kind === 'scan') {
       const it = (await api.scans(5)).items.find((s) => s.status === 'scanning' && !(ts(s.created_at) < info.startedAt - 5000))
       setJ(it ? { id: it.scan_id, pct: pctOf(it.progress_pct), page: it.page_count > 0 ? it.page_count : null, supported: 'progress_pct' in it } : NONE)
     } else if (info.copyId) {
@@ -39,9 +42,16 @@ export function useJob(kind: BusyKey, info: BusyInfo): Job {
 /** Cancel is hidden for the session once Papyrus answers 404 (too old). */
 let noCancel = false
 export const cancelUnsupported = () => noCancel
-export async function cancelJob(kind: BusyKey, id: string) {
-  try { await (kind === 'scan' ? api.cancelScan(id) : api.cancelCopy(id)) }
-  catch (e) { if (e instanceof ApiError && e.status === 404) noCancel = true; throw e }
+/** Resolves 'ok' | 'quiet' (409 not_running: the POST outcome decides) | 'nocancel' (cannot be cancelled); throws otherwise. */
+export async function cancelJob(kind: BusyKey, id: string): Promise<'ok' | 'quiet' | 'nocancel'> {
+  try { await (kind === 'scan' ? api.cancelScan(id) : api.cancelCopy(id)); return 'ok' }
+  catch (e) {
+    if (e instanceof ApiError) {
+      if (e.status === 404) noCancel = true
+      if (e.status === 409) return /not_running/.test(e.code) ? 'quiet' : /not_cancellable/.test(e.code) ? 'nocancel' : 'quiet'
+    }
+    throw e
+  }
 }
 
 /** Toast text for a failed scan/copy POST; null = say nothing. 409 after cancel is the expected outcome. */

@@ -73,7 +73,7 @@ export interface PrinterStatus { state: number; state_message: string; accepting
 export interface ScannerStatus { available: boolean; device: string | null; busy: boolean | null }
 export interface ScanOptions { resolutions: number[]; modes: string[]; formats: string[]; feeder_formats: string[]; sources: string[] }
 export interface ScanProfile { id: number; name: string; resolution: number; color_mode: string; format: string; source: string; ocr_enabled: boolean }
-export interface ScanReq { resolution: number; mode: string; format: string; source: string }
+export interface ScanReq { scan_id?: string; resolution: number; mode: string; format: string; source: string }
 export interface Scan { id: number; scan_id: string; status: string; resolution: number; mode: string; format: string; source: string; page_count: number; progress_pct?: number | null; error_message: string | null; created_at: string }
 export interface Job { id: number; title: string; status: string; copies: number; duplex: boolean; media: string; has_pin: boolean; source_type: string; created_at: string }
 export interface CopyStatus { copy_id?: string; phase: 'scanning' | 'printing' | 'done' | 'failed' | 'cancelled'; progress_pct: number | null; scan_id: string | null; job_id: number | null }

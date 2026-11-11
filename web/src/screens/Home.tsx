@@ -5,7 +5,7 @@ import { api, type KioskPreset } from '../api'
 import { Title, Pager, Spinner, useToast } from '../components/ui'
 import { useConfig, setBusy, startBusy, patchBusyInfo, getBusyInfo, isBusy } from '../store'
 import { useStatus, staleText, refreshStatus } from '../status'
-import { failMsg } from '../progress'
+import { failMsg, newId } from '../progress'
 import JobOverlay from '../components/JobOverlay'
 import { Qr } from '../components/Unlock'
 import type { TabId } from '../App'
@@ -73,8 +73,9 @@ export default function Home({ go }: { go: (t: TabId) => void }) {
   const [qr, setQr] = useState(false)
   const run = async (p: KioskPreset) => {
     if (running || isBusy('scan')) return
-    const sc = { resolution: 300, mode: 'Color', format: 'pdf', source: 'Flatbed', ...(p.scan ?? {}) }
-    setRunning(p.id); startBusy('scan', { title: p.label ?? p.id, line: `${sc.source} · ${sc.resolution} dpi · ${sc.mode}` })
+    const scan_id = newId()
+    const sc = { scan_id, resolution: 300, mode: 'Color', format: 'pdf', source: 'Flatbed', ...(p.scan ?? {}) }
+    setRunning(p.id); startBusy('scan', { scanId: scan_id, title: p.label ?? p.id, line: `${sc.source} · ${sc.resolution} dpi · ${sc.mode}` })
     try {
       const s = await api.startScan(sc)
       if (s.status === 'failed') return toast(s.error_message || 'Scan failed')

@@ -5,16 +5,16 @@ import { useJob, cancelJob, cancelUnsupported } from '../progress'
 function Inner({ kind, info }: { kind: BusyKey; info: BusyInfo }) {
   const job = useJob(kind, info)
   const live = kind === 'scan' || job.phase === 'scanning' || job.phase === 'printing'
-  const canCancel = !!job.id && job.supported && live && !info.sending && !cancelUnsupported()
+  const canCancel = !!job.id && job.supported && live && !info.sending && !info.noCancel && !cancelUnsupported()
   const cancel = () => {
     if (!job.id) return
     patchBusyInfo(kind, { cancelling: true })
     // 202: the original POST ends with 409 once the device has stopped; keep "Cancelling…" until then
-    cancelJob(kind, job.id).catch(() => patchBusyInfo(kind, { cancelling: false }))
+    cancelJob(kind, job.id).then((r) => { if (r === 'nocancel') patchBusyInfo(kind, { cancelling: false, noCancel: true }) }, () => patchBusyInfo(kind, { cancelling: false }))
   }
   const title = kind === 'copy' && job.phase === 'printing' ? 'Printing…' : kind === 'copy' && job.phase === 'scanning' ? 'Scanning original…' : info.title
   return <BusyOverlay title={title} line={info.line} startedAt={info.startedAt} pct={job.pct} page={job.page}
-    hint={info.sending ? 'Almost done' : 'Please wait, do not open the scanner'} cancelling={info.cancelling}
+    hint={info.sending ? 'Almost done' : 'Please wait, do not open the scanner'} cancelling={info.cancelling} note={info.noCancel ? `Can't cancel this ${kind}` : undefined}
     onCancel={canCancel || info.cancelling ? cancel : undefined} />
 }
 
