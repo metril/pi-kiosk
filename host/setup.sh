@@ -57,6 +57,10 @@ IP="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p'
 if [ -n "$IP" ]; then set_missing BRIDGE_BIND "$IP"
 else echo "could not detect the LAN IP: set BRIDGE_BIND in $ENVF"; fi
 
+TZN="$(timedatectl show -p Timezone --value 2>/dev/null || true)"
+if [ -n "$TZN" ]; then set_missing TZ "$TZN"
+else echo "could not detect the timezone: set TZ in $ENVF (e.g. America/New_York)"; fi
+
 cat <<'MSG'
 
 Host ready. Log out/in (docker group) and reboot once. Then pair the bridge

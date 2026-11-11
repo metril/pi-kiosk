@@ -42,6 +42,7 @@ services:
       BACKLIGHT_PATH: /backlight
       # Certificate SANs: the address the admin UI is reached on.
       ADMIN_SAN_IP: ${ADMIN_BIND:-${BRIDGE_BIND}}
+      TZ: ${TZ:-}
     volumes:
       # Docker does not follow the symlinks in /sys/class/backlight (they point
       # to ../../devices/...), so mount the one device dir (a bind source
@@ -52,6 +53,9 @@ services:
       - /run/pi-kiosk:/run/pi-kiosk
       # Kiosk settings (settings.json, 0600) and the admin TLS certificate; never user tokens.
       - kioskconfig:/var/lib/pi-kiosk
+      # Host timezone (clock on the lock screen, log timestamps).
+      - /etc/localtime:/etc/localtime:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
       # Host root, read-only, for disk usage stats.
       - /:/hostfs:ro
     healthcheck:
@@ -78,8 +82,13 @@ services:
       - /dev/dri:/dev/dri
       - /dev/input:/dev/input
       - /dev/tty1:/dev/tty1
+    environment:
+      TZ: ${TZ:-}
     volumes:
       - /run/udev:/run/udev:ro
+      # Host timezone (clock on the lock screen, log timestamps).
+      - /etc/localtime:/etc/localtime:ro
+      - /usr/share/zoneinfo:/usr/share/zoneinfo:ro
     depends_on:
       kiosk-api:
         condition: service_healthy
