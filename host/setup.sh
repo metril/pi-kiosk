@@ -12,6 +12,16 @@ done
 udevadm control --reload-rules
 udevadm trigger
 
+# Trigger dir for kiosk-api (reboot/restart/update) and the host units that act on it.
+install -m 0644 "$HERE/pi-kiosk.tmpfiles.conf" /etc/tmpfiles.d/pi-kiosk.conf
+systemd-tmpfiles --create /etc/tmpfiles.d/pi-kiosk.conf
+chmod +x "$HERE/update-check.sh"
+for U in "$HERE"/pi-kiosk-*.path "$HERE"/pi-kiosk-*.service "$HERE"/pi-kiosk-*.timer; do
+  sed "s|@ROOT@|$ROOT|g" "$U" > "/etc/systemd/system/$(basename "$U")"
+done
+systemctl daemon-reload
+systemctl enable --now pi-kiosk-reboot.path pi-kiosk-restart.path pi-kiosk-update.path pi-kiosk-update-check.timer
+
 if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
   id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx docker || usermod -aG docker "$SUDO_USER"
 fi

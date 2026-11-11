@@ -14,3 +14,16 @@ class Settings(BaseSettings):
     scan_smb_path: str = ""
     scan_cloud_provider_id: str = ""
     scan_email_to: str = ""
+    mqtt_host: str = ""
+    mqtt_port: int = 1883
+    mqtt_username: str = ""
+    mqtt_password: str = ""
+    mqtt_tls: bool = False
+    mqtt_discovery_prefix: str = "homeassistant"
+    kiosk_id: str = "kiosk"
+    kiosk_name: str = "Pi Kiosk"
+    stats_interval: int = 30
+    run_dir: str = "/run/pi-kiosk"
+    hostfs: str = "/hostfs"
+    proc_root: str = "/proc"
+    sys_root: str = "/sys"

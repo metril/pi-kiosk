@@ -1,0 +1,8 @@
+[Unit]
+Description=Watch for restart trigger
+
+[Path]
+PathExists=/run/pi-kiosk/restart
+
+[Install]
+WantedBy=multi-user.target

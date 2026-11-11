@@ -28,6 +28,16 @@ Set in `.env` (see `.env.example`):
 - `BACKLIGHT_DEVICE` (varies by screen/kernel, e.g. `10-0045`, `rpi_backlight`; `host/setup.sh` detects it): entry in `/sys/class/backlight`; only that device is mounted into `kiosk-api` (Docker does not follow the sysfs symlinks). `host/setup.sh` installs `99-backlight.rules` so `bl_power` is writable by the non-root api user.
 - Scan destinations, exposed via `GET /kiosk/config`: `SCAN_PAPERLESS` (default `true`), `SCAN_SMB_SHARE_ID` + `SCAN_SMB_PATH`, `SCAN_CLOUD_PROVIDER_ID`, `SCAN_EMAIL_TO`. Empty values disable that destination.
 
+## Home Assistant
+
+Optional, via MQTT discovery (no inbound port). Set `MQTT_HOST` (plus `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TLS`, `MQTT_DISCOVERY_PREFIX`, `KIOSK_ID`, `KIOSK_NAME`, `STATS_INTERVAL`; see `.env.example`) and `docker compose up -d`. Empty `MQTT_HOST` disables it. Re-run `sudo ./host/setup.sh` once so the host units and `/run/pi-kiosk` exist.
+
+Entities: screen light (on/off, brightness if supported), buttons (reload page, restart kiosk, reboot Pi), sensors (CPU temp, CPU %, memory %, disk %, load, boot time), throttled binary sensor, and an `update` entity for the images.
+
+Security: command topics can reboot the Pi. Give the kiosk's MQTT user its own credentials and an ACL that lets only this client (and HA) publish to `<KIOSK_ID>` command topics.
+
+Updating: press Install on the HA update entity (checked hourly by `pi-kiosk-update-check.timer`), or manually: `docker compose pull && docker compose up -d`.
+
 ## Tokens
 
 - Label maker: Settings -> API keys, create a key with scope `write` (`lm_...`) -> `LABELMAKER_TOKEN`. Only needed when the label app runs with `AUTH_MODE=oidc`; leave empty with `AUTH_MODE=none` (no auth).

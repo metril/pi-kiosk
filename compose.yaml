@@ -44,6 +44,10 @@ services:
       # symlink is resolved). Find yours: ls /sys/class/backlight. bl_power is
       # made world-writable by host/99-backlight.rules (api runs as uid 10001).
       - /sys/class/backlight/${BACKLIGHT_DEVICE:-10-0045}:/backlight/${BACKLIGHT_DEVICE:-10-0045}:rw
+      # Trigger files (reboot/restart/update) and update.json; host systemd units act on them.
+      - /run/pi-kiosk:/run/pi-kiosk
+      # Host root, read-only, for disk usage stats.
+      - /:/hostfs:ro
     healthcheck:
       test:
         - CMD

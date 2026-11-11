@@ -1,0 +1,12 @@
+[Unit]
+Description=Update kiosk images on request from kiosk-api
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/rm -f /run/pi-kiosk/update
+ExecStart=/usr/bin/docker compose --project-directory @ROOT@ up -d
+ExecStart=/usr/bin/docker image prune -f
+ExecStart=@ROOT@/host/update-check.sh
+ExecStopPost=/bin/rm -f /run/pi-kiosk/update

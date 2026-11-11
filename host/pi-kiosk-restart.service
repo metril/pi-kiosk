@@ -1,0 +1,10 @@
+[Unit]
+Description=Restart kiosk-display on request from kiosk-api
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/rm -f /run/pi-kiosk/restart
+ExecStart=/usr/bin/docker compose --project-directory @ROOT@ restart kiosk-display
+ExecStopPost=/bin/rm -f /run/pi-kiosk/restart

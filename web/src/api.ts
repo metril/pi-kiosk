@@ -73,6 +73,7 @@ export interface KioskConfig {
   idle_minutes: number
   destinations: { paperless: boolean; smb: { share_id: string; path: string } | null; cloud: { provider_id: string } | null; email: { to: string } | null }
 }
+export interface ScreenState { on: boolean; brightness: number | null; max: number | null; reload_seq: number }
 export type Sig = AbortSignal
 
 export const api = {
@@ -97,6 +98,7 @@ export const api = {
   labelJob: (id: string, sg?: Sig) => get<LabelJob>(`/labels/print/jobs/${id}`, true, sg),
   cancelLabel: (id: string) => post<unknown>(`/labels/print/jobs/${id}/cancel`),
   kioskConfig: (sg?: Sig) => get<KioskConfig>('/kiosk/config', true, sg),
+  screenState: (sg?: Sig) => get<ScreenState>('/kiosk/screen', true, sg),
   screen: (on: boolean) => post<unknown>(`/kiosk/screen/${on ? 'on' : 'off'}`, undefined, true),
 }
 export const thumbs = {

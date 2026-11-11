@@ -1,3 +1,4 @@
+import asyncio
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -6,7 +7,10 @@ import httpx
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 
+from . import mqtt
 from .config import Settings
+from .screen import NoBacklight, NoBrightness, Screen
+from .stats import Stats
 
 ID = r"[A-Za-z0-9-]+"
 
@@ -45,11 +49,20 @@ DROP_RESP = HOP | {"set-cookie", "content-length", "content-encoding", "location
 def create_app(settings: Settings | None = None) -> FastAPI:
     s = settings or Settings()
 
+    scr = Screen(s.backlight_path)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         async with httpx.AsyncClient(timeout=15) as client:
             app.state.client = client
-            yield
+            task = asyncio.create_task(mqtt.run(s, scr, Stats(s.proc_root, s.sys_root, s.hostfs))) \
+                if s.mqtt_host else None
+            try:
+                yield
+            finally:
+                if task:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     upstreams = {
@@ -71,16 +84,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         }
 
+    @app.get("/kiosk/screen")
+    async def screen_state():
+        return scr.state()
+
+    @app.post("/kiosk/screen/brightness/{n}")
+    async def brightness(n: int):
+        try:
+            scr.set_brightness(n)
+        except NoBrightness:
+            return JSONResponse({"error": {"code": "no_brightness"}}, 503)
+        return Response(status_code=204)
+
     @app.post("/kiosk/screen/{state}")
     async def screen(state: str):
         if state not in ("on", "off"):
             return JSONResponse({"error": {"code": "not_found"}}, 404)
-        devs = sorted(p for p in Path(s.backlight_path).glob("*") if p.is_dir()) \
-            if Path(s.backlight_path).is_dir() else []
-        if not devs:
-            return JSONResponse({"error": {"code": "no_backlight"}}, 503)
         try:
-            (devs[0] / "bl_power").write_text("0" if state == "on" else "1")
+            scr.set_on(state == "on")
+        except NoBacklight:
+            return JSONResponse({"error": {"code": "no_backlight"}}, 503)
         except OSError:
             return JSONResponse({"error": {"code": "backlight_write_failed"}}, 500)
         return Response(status_code=204)

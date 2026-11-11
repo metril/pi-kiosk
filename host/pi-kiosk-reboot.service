@@ -1,0 +1,9 @@
+[Unit]
+Description=Reboot the Pi on request from kiosk-api
+
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/rm -f /run/pi-kiosk/reboot
+ExecStart=/usr/bin/systemctl reboot
+ExecStopPost=/bin/rm -f /run/pi-kiosk/reboot

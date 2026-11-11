@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
 import { useConfig } from '../store'
+import { usePoll } from '../hooks'
 
 /** Black overlay after idle; first touch wakes the screen and is swallowed. */
 export default function Idle() {
@@ -11,6 +12,22 @@ export default function Idle() {
   mins.current = cfg?.idle_minutes ?? 0
   const sleepRef = useRef(false)
   sleepRef.current = asleep
+
+  // Sync with server-side screen state (Home Assistant can switch it / reload the page).
+  const { data: scr } = usePoll((sg) => api.screenState(sg), 2000)
+  const prevOn = useRef<boolean | null>(null)
+  const seq0 = useRef<number | null>(null)
+  useEffect(() => {
+    if (!scr) return
+    if (seq0.current === null) seq0.current = scr.reload_seq
+    else if (scr.reload_seq !== seq0.current) { location.reload(); return }
+    // Act on transitions only, so a stale poll or a backlight-less kiosk can't undo local sleep.
+    if (prevOn.current !== scr.on) {
+      if (scr.on && sleepRef.current) { setAsleep(false); last.current = Date.now() }
+      else if (!scr.on && !sleepRef.current) setAsleep(true)
+    }
+    prevOn.current = scr.on
+  }, [scr])
 
   useEffect(() => {
     const touch = () => { if (!sleepRef.current) last.current = Date.now() }
