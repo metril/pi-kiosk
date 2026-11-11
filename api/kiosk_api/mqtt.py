@@ -2,6 +2,8 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
+import tempfile
 from pathlib import Path
 
 import aiomqtt
@@ -184,6 +186,30 @@ def tls_params(s: Settings) -> aiomqtt.TLSParameters | None:
     return aiomqtt.TLSParameters(ca_certs=s.mqtt_ca_file or None)
 
 
+STATE = {"connected": False}
+
+
+async def probe(s: Settings, timeout: float = 8) -> None:
+    """Connect once and disconnect (raises on failure). s.mqtt_ca_pem is honoured."""
+    path = None
+    try:
+        if s.mqtt_tls and s.mqtt_ca_pem:
+            fd, path = tempfile.mkstemp(suffix=".pem")
+            with os.fdopen(fd, "w") as f:
+                f.write(s.mqtt_ca_pem)
+            s = s.model_copy(update={"mqtt_ca_file": path})
+        async with asyncio.timeout(timeout):
+            async with aiomqtt.Client(
+                s.mqtt_host, s.mqtt_port, username=s.mqtt_username or None,
+                password=s.mqtt_password or None, tls_params=tls_params(s),
+                tls_insecure=s.mqtt_tls and s.mqtt_tls_insecure):
+                pass
+    finally:
+        if path:
+            with contextlib.suppress(OSError):
+                os.unlink(path)
+
+
 async def run(s: Settings, screen: Screen, stats: Stats, unlock=None):
     delay = 1
     while True:
@@ -195,7 +221,11 @@ async def run(s: Settings, screen: Screen, stats: Stats, unlock=None):
                 will=aiomqtt.Will(topics(s)["avail"], "offline", retain=True),
             ) as client:
                 delay = 1
-                await session(client, s, screen, stats, unlock)
+                STATE["connected"] = True
+                try:
+                    await session(client, s, screen, stats, unlock)
+                finally:
+                    STATE["connected"] = False
         except asyncio.CancelledError:
             raise
         except (aiomqtt.MqttError, ExceptionGroup, OSError) as e:
@@ -204,3 +234,59 @@ async def run(s: Settings, screen: Screen, stats: Stats, unlock=None):
             log.exception("mqtt: unexpected error; retry in %ss", delay)
         await asyncio.sleep(delay)
         delay = min(delay * 2, 60)
+
+
+def mqtt_key(s: Settings) -> tuple | None:
+    """Everything that needs a client restart; None when disabled."""
+    if not s.mqtt_host:
+        return None
+    return (s.mqtt_host, s.mqtt_port, s.mqtt_username, s.mqtt_password, s.mqtt_tls,
+            s.mqtt_ca_pem, s.mqtt_ca_file, s.mqtt_tls_insecure, s.mqtt_discovery_prefix,
+            s.kiosk_id, s.kiosk_name)
+
+
+class Manager:
+    """Owns the MQTT client task; restarts it only when its settings change."""
+
+    def __init__(self, screen: Screen, stats: Stats, unlock=None, runner=None):
+        self.screen, self.stats, self.unlock = screen, stats, unlock
+        self.runner = runner or run
+        self.task: asyncio.Task | None = None
+        self.key = None
+        self.starts = 0
+        self.ca_path: str | None = None
+        self._lock = asyncio.Lock()
+
+    async def stop(self):
+        async with self._lock:
+            await self._stop()
+
+    async def _stop(self):
+        t, self.task = self.task, None
+        if t:
+            t.cancel()
+            await asyncio.gather(t, return_exceptions=True)
+        if self.ca_path:
+            with contextlib.suppress(OSError):
+                os.unlink(self.ca_path)
+            self.ca_path = None
+
+    async def apply(self, s: Settings):
+        async with self._lock:
+            await self._apply(s)
+
+    async def _apply(self, s: Settings):
+        k = mqtt_key(s)
+        if k == self.key and (k is None or (self.task and not self.task.done())):
+            return
+        await self._stop()
+        self.key = k
+        if k is None:
+            return
+        if s.mqtt_ca_pem:
+            fd, self.ca_path = tempfile.mkstemp(suffix=".pem")  # 0600
+            with os.fdopen(fd, "w") as f:
+                f.write(s.mqtt_ca_pem)
+            s = s.model_copy(update={"mqtt_ca_file": self.ca_path})
+        self.starts += 1
+        self.task = asyncio.create_task(self.runner(s, self.screen, self.stats, self.unlock))

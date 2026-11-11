@@ -5,7 +5,7 @@ import { usePoll } from '../hooks'
 import { setBusy as setB, isBusy, useBusy } from '../store'
 import SendPanel from '../components/Send'
 import Viewer from '../components/Viewer'
-import { Spinner, Title, useToast, errMsg, ConfirmBtn } from '../components/ui'
+import { Spinner, Title, Pager, useToast, errMsg, ConfirmBtn } from '../components/ui'
 
 function Cycle({ label, value, opts, onChange }: { label: string; value: string | number; opts: (string | number)[]; onChange: (v: any) => void }) {
   const next = () => { if (opts.length) onChange(opts[(opts.indexOf(value) + 1) % opts.length]) }
@@ -59,12 +59,10 @@ export default function ScanScreen() {
   return (
     <div className="h-full flex flex-col gap-2 relative">
       <Title>Scan</Title>
-      <div className="flex gap-2 overflow-x-auto shrink-0 -mt-1">
-        {profiles.map((p) => (
-          <button key={p.id} onClick={() => pick(p)} className={`btn shrink-0 ${sel === p.id ? 'btn-acc' : ''}`}>{p.name}</button>
-        ))}
-        {prof.data && !profiles.length && <div className="text-slate-400 p-3">No scan profiles</div>}
-      </div>
+      <Pager compact cols={4} rows={1} className="h-[64px] shrink-0"
+        items={profiles.length ? profiles.map((p) => (
+          <button key={p.id} onClick={() => pick(p)} className={`btn min-w-0 ${sel === p.id ? 'btn-acc' : ''}`}><span className="truncate">{p.name}</span></button>
+        )) : [<div key="none" className="text-slate-400 p-3 col-span-4">{prof.data ? 'No scan profiles' : ''}</div>]} />
       <div className="flex gap-2 shrink-0">
         <Cycle label="Source" value={src} opts={opts.data?.sources ?? ['Flatbed', 'ADF']} onChange={setSrc} />
         <Cycle label="Mode" value={mode} opts={opts.data?.modes ?? ['Color', 'Gray']} onChange={setMode} />
@@ -73,15 +71,15 @@ export default function ScanScreen() {
           {busy ? <><Spinner />Scanning…</> : <><ScanLine />Scan</>}
         </button>
       </div>
-      <div className="text-slate-300 font-semibold">Results</div>
-      <div className="flex gap-2 overflow-x-auto flex-1 min-h-0 pb-1">
+      <div className="text-slate-300 font-semibold leading-none">Results</div>
+      <div data-scroll className="flex gap-2 overflow-x-auto overflow-y-hidden flex-1 min-h-0">
         {(scans.data?.items ?? []).map((s) => (
           <div key={s.scan_id} className="bg-panel border border-line rounded-xl p-1 w-[120px] shrink-0 flex flex-col">
             <div className="flex-1 min-h-0 bg-slate-200 rounded flex items-center justify-center overflow-hidden relative">
               {s.status === 'completed' ? <button className="w-full h-full flex items-center justify-center" onClick={() => setAct(s)} aria-label="Scan actions"><img src={thumbs.scan(s.scan_id)} alt="" className="max-h-full max-w-full object-contain" /></button> : <FileText className={s.status === 'failed' ? 'text-err' : 'text-slate-500'} />}
             </div>
             <div className="text-xs text-slate-300 text-center py-0.5">{s.status === 'completed' ? `${s.page_count}p ${s.format}` : s.status}</div>
-            <button className="btn !min-h-[56px] !px-1" disabled={s.status !== 'completed'} onClick={() => setAct(s)}><SendI size={18} />Actions</button>
+            <button className="btn !px-1" disabled={s.status !== 'completed'} onClick={() => setAct(s)}><SendI size={18} />Actions</button>
           </div>
         ))}
       </div>
@@ -89,8 +87,8 @@ export default function ScanScreen() {
       {sendFor && <SendPanel scanId={sendFor.scan_id} onClose={() => setSendFor(null)} onDeleted={scans.refresh} />}
       {act && (
         <div className="absolute inset-0 z-30 bg-black/85 flex items-center justify-center">
-          <div className="bg-panel border border-line rounded-2xl p-4 w-[480px] flex flex-col gap-2">
-            <div className="flex items-center justify-between text-xl font-bold">Scan {act.page_count}p {act.format}<button className="btn" onClick={() => setAct(null)}><X /></button></div>
+          <div className="bg-panel border border-line rounded-2xl p-3 w-[520px] flex flex-col gap-2">
+            <div className="flex items-center justify-between text-xl font-bold">Scan {act.page_count}p {act.format}<button className="btn" onClick={() => setAct(null)} aria-label="Close"><X /></button></div>
             <div className="grid grid-cols-2 gap-2">
               <button className="btn" onClick={() => { setViewing(act); setAct(null) }}><Eye />Preview</button>
               <button className="btn btn-acc" onClick={() => { setSendFor(act); setAct(null) }}><SendI />Send</button>

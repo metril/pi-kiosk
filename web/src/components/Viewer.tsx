@@ -261,7 +261,7 @@ export default function Viewer({ src, mime, title, onClose, actions }: ViewerPro
   const rects = layout.rects
   return (
     <div className="fixed inset-0 z-50 bg-neutral-950 text-slate-100 flex flex-col select-none">
-      <div data-ui className="flex items-center gap-2 p-2 bg-panel border-b border-line shrink-0">
+      <div data-ui className="flex items-center gap-2 p-1 bg-panel border-b border-line shrink-0">
         <button className="btn" onClick={onClose} aria-label="Close"><X /></button>
         <div className="flex-1 min-w-0 truncate text-lg font-semibold">{title}</div>
         {multi && <div className="text-lg tabular-nums px-2">{page + 1} / {count}</div>}
@@ -292,7 +292,7 @@ export default function Viewer({ src, mime, title, onClose, actions }: ViewerPro
         )}
         {doc && multi && !scroll && (
           <>
-            <button data-ui className="btn absolute left-2 top-1/2 -translate-y-1/2 !min-h-[96px] !min-w-[64px] opacity-80" disabled={page === 0} onClick={() => goto(page - 1)} aria-label="Previous page"><ChevronLeft size={36} /></button>
+            <button data-ui className="btn absolute left-2 top-1/2 -translate-y-1/2 !min-h-[96px] !min-w-[56px] opacity-80" disabled={page === 0} onClick={() => goto(page - 1)} aria-label="Previous page"><ChevronLeft size={36} /></button>
             <button data-ui className="btn absolute right-2 top-1/2 -translate-y-1/2 !min-h-[96px] !min-w-[64px] opacity-80" disabled={page === count - 1} onClick={() => goto(page + 1)} aria-label="Next page"><ChevronRight size={36} /></button>
           </>
         )}

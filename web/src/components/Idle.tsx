@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import { useConfig } from '../store'
+import { useConfig, syncConfigRev } from '../store'
 import { usePoll } from '../hooks'
 
 /** Black overlay after idle; first touch wakes the screen and is swallowed. */
@@ -19,6 +19,7 @@ export default function Idle() {
   const seq0 = useRef<number | null>(null)
   useEffect(() => {
     if (!scr) return
+    syncConfigRev(scr.config_rev)
     if (seq0.current === null) seq0.current = scr.reload_seq
     else if (scr.reload_seq !== seq0.current) { location.reload(); return }
     // Act on transitions only, so a stale poll or a backlight-less kiosk can't undo local sleep.

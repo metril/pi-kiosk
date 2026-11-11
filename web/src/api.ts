@@ -97,12 +97,13 @@ export interface Entry { name: string; path: string; is_dir: boolean; id?: strin
 export interface Provider { id: string; name: string }
 export interface KioskConfig {
   idle_minutes: number
-  name?: string; public_url?: string
+  name?: string; public_url?: string; config_rev?: number | string
+  smb_shares?: { id: string; name: string }[]
   unlock?: { idle_s: number; max_s: number }
   presets?: KioskPreset[]; contacts?: Contact[]
   destinations: { paperless: boolean; smb: { share_id: string; path: string } | null; cloud: { provider_id: string } | null; email: { to: string } | null }
 }
-export interface ScreenState { on: boolean; brightness: number | null; max: number | null; reload_seq: number }
+export interface ScreenState { config_rev?: number | string; on: boolean; brightness: number | null; max: number | null; reload_seq: number }
 export type Sig = AbortSignal
 
 export const api = {

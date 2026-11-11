@@ -40,12 +40,12 @@ export function UnlockModal() {
   const pending = st?.state === 'pending'
   return (
     <div className="absolute inset-0 z-50 bg-black/90 flex items-center justify-center">
-      <div className="bg-panel border border-line rounded-2xl p-4 w-[640px] relative">
-        <button className="btn !min-h-[56px] absolute top-2 right-2" onClick={() => closeUnlock(false)} aria-label="Cancel"><X /></button>
-        <div className="text-2xl font-bold mb-3 flex items-center gap-2"><Lock />Unlock with your phone</div>
+      <div className="bg-panel border border-line rounded-2xl p-3 w-[640px] relative">
+        <button className="btn absolute top-2 right-2" onClick={() => closeUnlock(false)} aria-label="Cancel"><X /></button>
+        <div className="text-2xl font-bold mb-2 flex items-center gap-2"><Lock />Unlock with your phone</div>
         {pending && st?.qr_uri ? (
           <div className="flex gap-4 items-center">
-            <Qr text={st.qr_uri} size={240} />
+            <Qr text={st.qr_uri} size={220} />
             <div className="flex flex-col gap-2">
               <div className="text-lg text-slate-300">Scan the code, sign in, and enter</div>
               <div className="text-5xl font-bold tracking-[0.15em] text-acc">{st.user_code}</div>
@@ -54,7 +54,7 @@ export function UnlockModal() {
             </div>
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-3 py-6">
+          <div className="flex flex-col items-center gap-3 py-8">
             {err ? <div className="text-err text-xl">{err}</div>
               : st?.state === 'denied' ? <div className="text-err text-xl">Request denied</div>
               : st?.state === 'expired' ? <div className="text-warn text-xl">Code expired</div>
@@ -94,10 +94,10 @@ export function SessionChip() {
   }, [unlocked])
   if (!unlocked) return null
   return (
-    <div className="absolute top-1 right-2 z-20 flex items-center gap-2 bg-panel border border-line rounded-xl pl-3 h-12">
+    <div className="flex items-center gap-2 bg-panel border border-line rounded-xl pl-3 h-11 shrink-0">
       <User size={20} className="text-acc" /><span className="font-semibold max-w-[140px] truncate">{s.user || 'User'}</span>
       <span className="text-slate-300 tabular-nums">{fmt(left)}</span>
-      <button className="btn !min-h-[48px] !min-w-[48px] !px-3 !rounded-l-none" onClick={() => api.lock().then(setSession).catch(() => {})}><Lock size={20} />Lock</button>
+      <button className="btn !min-h-[44px] h-11 !px-3 !rounded-l-none" onClick={() => api.lock().then(setSession).catch(() => {})}><Lock size={20} />Lock</button>
     </div>
   )
 }

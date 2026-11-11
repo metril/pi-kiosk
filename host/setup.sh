@@ -35,25 +35,27 @@ if [ -f "$CMDLINE" ] && ! grep -qw 'consoleblank=0' "$CMDLINE"; then
   echo "added consoleblank=0 to $CMDLINE (reboot required)"
 fi
 
+ENVF="$ROOT/.env"
+[ -f "$ENVF" ] || { [ -f "$ROOT/.env.example" ] && cp "$ROOT/.env.example" "$ENVF" && echo "created $ENVF"; }
+# Set KEY=VALUE in .env only when missing or empty.
+set_missing() {
+  local k="$1" v="$2"
+  [ -f "$ENVF" ] || return 0
+  if grep -q "^$k=." "$ENVF"; then return 0; fi
+  if grep -q "^$k=" "$ENVF"; then sed -i "s|^$k=.*|$k=$v|" "$ENVF"; else echo "$k=$v" >> "$ENVF"; fi
+  echo "set $k=$v in $ENVF"
+}
+
 BL=""
 for d in /sys/class/backlight/*; do
   [ -e "$d" ] && { BL="$(basename "$d")"; break; }
 done
-if [ -n "$BL" ]; then
-  echo "BACKLIGHT_DEVICE=$BL"
-  if [ -f "$ROOT/.env" ]; then
-    if grep -q '^BACKLIGHT_DEVICE=' "$ROOT/.env"; then
-      sed -i "s|^BACKLIGHT_DEVICE=.*|BACKLIGHT_DEVICE=$BL|" "$ROOT/.env"
-    else
-      echo "BACKLIGHT_DEVICE=$BL" >> "$ROOT/.env"
-    fi
-    echo "set BACKLIGHT_DEVICE in $ROOT/.env"
-  else
-    echo "no .env yet: set BACKLIGHT_DEVICE=$BL after cp .env.example .env"
-  fi
-else
-  echo "no /sys/class/backlight device found (screen on/off unavailable)"
-fi
+if [ -n "$BL" ]; then set_missing BACKLIGHT_DEVICE "$BL"
+else echo "no /sys/class/backlight device found (screen on/off unavailable)"; fi
+
+IP="$(ip -4 route get 1.1.1.1 2>/dev/null | sed -n 's/.* src \([0-9.]*\).*/\1/p' | head -n1)"
+if [ -n "$IP" ]; then set_missing BRIDGE_BIND "$IP"
+else echo "could not detect the LAN IP: set BRIDGE_BIND in $ENVF"; fi
 
 cat <<'MSG'
 
@@ -67,5 +69,6 @@ BEFORE the first `docker compose up -d` (run from the repo dir):
      <pi-host>:9177, paste the cert, save. Copy the app certificate shown to app.crt here.
   4. Pair:
        docker compose run --rm -T labelmaker-bridge python -m labelmaker.driver.bridge pair - < app.crt
-  5. cp .env.example .env, fill in tokens, then: docker compose up -d
+  5. Set PAPYRUS_URL and PAPYRUS_TOKEN (Papyrus -> Settings -> Kiosks) in .env, then: docker compose up -d
+  6. Configure presets, contacts, label maker, MQTT at https://<pi-host>:8443 (Papyrus admin sign-in)
 MSG

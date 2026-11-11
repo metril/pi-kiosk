@@ -32,6 +32,20 @@ class Settings(BaseSettings):
     kiosk_id: str = "kiosk"
     kiosk_name: str = "Pi Kiosk"
     stats_interval: int = 30
+    admin_port: int = 8443
+    admin_host: str = "0.0.0.0"  # in-container listen address; the host side is ADMIN_BIND
+    admin_tls: str = "on"  # "off" behind a reverse proxy that terminates TLS
+    admin_cookie_secure: bool = True  # false only for plain-HTTP LAN use without a TLS proxy
+    admin_trusted_proxies: str = ""  # comma-separated proxy IPs allowed to set X-Forwarded-For
+    admin_san_ip: str = ""  # host LAN IP for the certificate (compose passes ADMIN_BIND)
+    admin_san_hosts: str = ""  # extra comma-separated DNS names for the certificate
+    admin_cert_dir: str = "/var/lib/pi-kiosk"
+    settings_path: str = "/var/lib/pi-kiosk/settings.json"
+    # Set from the stored settings (not env): None/empty means "use the env values".
+    contacts_override: list[dict] | None = None
+    presets_override: list[dict] | None = None
+    shares: list[dict] = []
+    mqtt_ca_pem: str = ""
     run_dir: str = "/run/pi-kiosk"
     hostfs: str = "/hostfs"
     proc_root: str = "/proc"
@@ -47,10 +61,17 @@ class Settings(BaseSettings):
         return [x for x in d if isinstance(x, dict)] if isinstance(d, list) else []
 
     def contacts(self) -> list[dict]:
+        if self.contacts_override is not None:
+            return self.contacts_override
         return [c for c in self._json_list(self.kiosk_contacts)
                 if c.get("id") and c.get("email")]
 
     def presets(self) -> list[dict]:
+        if self.presets_override is not None:
+            out = [dict(p) for p in self.presets_override]
+            for p in out:
+                p["needs_unlock"] = bool(p.get("targets"))
+            return out
         out = [p for p in self._json_list(self.kiosk_presets) if p.get("id")]
         if not any(p["id"] == "default" for p in out):
             targets = []

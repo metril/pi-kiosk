@@ -35,9 +35,13 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:8090:8090"
+      # Admin UI (HTTPS by default). Never 0.0.0.0 unless you mean it.
+      - "${ADMIN_BIND:-${BRIDGE_BIND:?set BRIDGE_BIND in .env}}:8443:8443"
     env_file: .env
     environment:
       BACKLIGHT_PATH: /backlight
+      # Certificate SANs: the address the admin UI is reached on.
+      ADMIN_SAN_IP: ${ADMIN_BIND:-${BRIDGE_BIND}}
     volumes:
       # Docker does not follow the symlinks in /sys/class/backlight (they point
       # to ../../devices/...), so mount the one device dir (a bind source
@@ -46,6 +50,8 @@ services:
       - /sys/class/backlight/${BACKLIGHT_DEVICE:-10-0045}:/backlight/${BACKLIGHT_DEVICE:-10-0045}:rw
       # Trigger files (reboot/restart/update) and update.json; host systemd units act on them.
       - /run/pi-kiosk:/run/pi-kiosk
+      # Kiosk settings (settings.json, 0600) and the admin TLS certificate; never user tokens.
+      - kioskconfig:/var/lib/pi-kiosk
       # Host root, read-only, for disk usage stats.
       - /:/hostfs:ro
     healthcheck:
@@ -81,3 +87,4 @@ services:
 
 volumes:
   bridgedata: {}
+  kioskconfig: {}

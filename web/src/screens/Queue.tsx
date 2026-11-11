@@ -28,7 +28,7 @@ export default function Queue() {
   return (
     <div className="h-full flex flex-col relative">
       <Title right={<span className="text-slate-300 text-lg">{q.data ? `${q.data.total} held` : ''}</span>}>Queue</Title>
-      <div className="flex flex-col gap-2 overflow-y-auto flex-1 min-h-0">
+      <div data-scroll className="flex flex-col gap-2 overflow-y-auto flex-1 min-h-0">
         {q.data && !jobs.length && <div className="text-slate-400 text-xl p-6 text-center">No held jobs</div>}
         {jobs.map((j) => (
           <div key={j.id} className="bg-panel border border-line rounded-xl p-2 flex items-center gap-2">

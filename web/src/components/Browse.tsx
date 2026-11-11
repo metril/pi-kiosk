@@ -50,9 +50,9 @@ export default function Browse({ src, onFile, onPickFolder }: { src: Src; onFile
   if (err && !loc) return <div className="text-err p-3 text-lg">{err}</div>
   if (!roots) return <div className="p-4"><Spinner /></div>
   if (!loc) return (
-    <div className="grid grid-cols-2 gap-2 overflow-y-auto">
+    <div data-scroll className="grid grid-cols-2 gap-2 overflow-y-auto h-full content-start">
       {!roots.length && <div className="text-slate-400 p-3">{src === 'smb' ? 'No shares' : 'No cloud providers'}</div>}
-      {roots.map((r) => { const n = rootName(r); return <button key={r.id} className="btn !justify-start" onClick={() => setLoc({ src, ref: String(r.id), refName: n, kind: (r as any).provider ?? '', path: '', folder_id: '' })}><Ico />{n}</button> })}
+      {roots.map((r) => { const n = rootName(r); return <button key={r.id} className="btn !justify-start min-w-0" onClick={() => setLoc({ src, ref: String(r.id), refName: n, kind: (r as any).provider ?? '', path: '', folder_id: '' })}><Ico className="shrink-0" /><span className="truncate">{n}</span></button> })}
     </div>
   )
   return (
@@ -64,11 +64,11 @@ export default function Browse({ src, onFile, onPickFolder }: { src: Src; onFile
       </div>
       {err && <div className="text-err">{err}</div>}
       {!items && !err && <Spinner />}
-      <div className="flex flex-col gap-1 overflow-y-auto min-h-0 flex-1">
+      <div data-scroll className="flex flex-col gap-1 overflow-y-auto min-h-0 flex-1">
         {items?.length === 0 && <div className="text-slate-400 p-3">Empty</div>}
         {items?.map((e) => isDir(e)
-          ? <button key={e.path + e.name} className="btn !justify-start" onClick={() => enter(e)}><Folder className="text-acc" />{e.name}</button>
-          : onFile && <button key={e.path + e.name} className="btn !justify-start" onClick={() => onFile({ ...loc, path: e.path || join(loc.path, e.name), entry: e })}><File />{e.name}</button>)}
+          ? <button key={e.path + e.name} className="btn !justify-start" onClick={() => enter(e)}><Folder className="text-acc shrink-0" /><span className="truncate">{e.name}</span></button>
+          : onFile && <button key={e.path + e.name} className="btn !justify-start" onClick={() => onFile({ ...loc, path: e.path || join(loc.path, e.name), entry: e })}><File className="shrink-0" /><span className="truncate">{e.name}</span></button>)}
       </div>
     </div>
   )

@@ -27,6 +27,14 @@ export function startConfig() {
   const load = () => api.kioskConfig().then(cfg.set).catch(() => setTimeout(load, 30_000))
   load()
 }
+/** Refetch /kiosk/config when the polled config_rev differs from the loaded one (no reload). */
+let fetching: number | string | undefined
+export function syncConfigRev(rev: number | string | undefined) {
+  const cur = cfg.get()
+  if (rev === undefined || !cur || cur.config_rev === rev || fetching === rev) return
+  fetching = rev
+  api.kioskConfig().then(cfg.set).catch(() => {}).finally(() => { fetching = undefined })
+}
 export function useConfig() {
   useEffect(startConfig, [])
   return useSyncExternalStore(cfg.sub, cfg.get)

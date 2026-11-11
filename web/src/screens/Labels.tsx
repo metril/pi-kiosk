@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Star, RotateCw, X } from 'lucide-react'
 import { api, thumbs, ApiError, type LabelJob } from '../api'
 import { usePoll } from '../hooks'
-import { Spinner, Title, useToast, errMsg } from '../components/ui'
+import { Spinner, Title, Pager, useToast, errMsg } from '../components/ui'
 
 const DONE = ['done', 'failed', 'canceled']
 
@@ -64,24 +64,22 @@ export default function Labels() {
     <div className="h-full flex flex-col relative">
       <Title>Labels</Title>
       {job && <JobToast id={job} onClose={() => setJob(null)} />}
-      <div className="grid grid-cols-3 gap-2 content-start overflow-hidden" style={{ height: 196 }}>
-        {list.slice(0, 6).map((p) => (
+      <Pager cols={3} rows={2} className="h-[212px] shrink-0"
+        items={list.length ? list.map((p) => (
           <button key={p.id} disabled={busy} onClick={() => start(() => api.printPreset(p.id))}
-            className="btn flex-col !items-start !justify-center !gap-0 text-left min-h-[92px]">
+            className="btn flex-col !items-start !justify-center !gap-0 text-left min-w-0">
             <span className="flex items-center gap-1 w-full"><span className="truncate">{p.name}</span>{p.favorite && <Star size={16} className="text-warn shrink-0" fill="currentColor" />}</span>
             <span className="text-sm text-slate-400 font-normal">{p.tape_width_mm ? `${p.tape_width_mm}mm ` : ''}{p.label_type}</span>
           </button>
-        ))}
-        {presets.data && !list.length && <div className="col-span-3 text-slate-400 text-lg p-4">No presets saved.</div>}
-      </div>
-      <div className="text-slate-300 font-semibold mt-1 mb-1">Recent</div>
-      <div className="flex gap-2 overflow-hidden flex-1">
+        )) : [<div key="none" className="col-span-3 text-slate-400 text-lg p-4">{presets.data ? 'No presets saved.' : ''}</div>]} />
+      <div className="text-slate-300 font-semibold leading-none my-1">Recent</div>
+      <div className="flex gap-2 overflow-hidden flex-1 min-h-0">
         {(hist.data?.items ?? []).slice(0, 5).map((h) => (
           <div key={h.id} className="bg-panel border border-line rounded-xl p-1 flex flex-col items-center w-[136px] shrink-0">
             <div className="h-12 w-full bg-white rounded flex items-center justify-center overflow-hidden">
               <img src={thumbs.label(h.id)} alt="" className="max-h-12 max-w-full object-contain" />
             </div>
-            <button className="btn !min-h-[56px] w-full mt-1 !px-1 text-base" disabled={busy} onClick={() => start(() => api.reprint(h.id))}>
+            <button className="btn w-full mt-1 !px-1 text-base" disabled={busy} onClick={() => start(() => api.reprint(h.id))}>
               <RotateCw size={18} />Again
             </button>
           </div>

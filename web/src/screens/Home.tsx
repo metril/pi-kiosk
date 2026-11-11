@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react'
 import { useState } from 'react'
-import { Printer, ScanLine, Tag, Pause, FolderOpen, Smartphone, Lock } from 'lucide-react'
+import { Printer, ScanLine, Tag, Pause, FolderOpen, Smartphone, Lock, FileText, Receipt, Image, Book, Mail, Folder, Archive, type LucideIcon } from 'lucide-react'
 import { api, ApiError, type KioskPreset } from '../api'
 import { usePoll } from '../hooks'
-import { Title, Spinner, useToast, errMsg } from '../components/ui'
+import { Title, Pager, Spinner, useToast, errMsg } from '../components/ui'
 import { useConfig, setBusy, isBusy } from '../store'
 import { ensureUnlocked } from '../session'
 import { Qr } from '../components/Unlock'
@@ -24,15 +24,18 @@ const LABEL_ERR: Record<string, string> = {
   bridge_error: 'Bridge error',
 }
 
+const PRESET_ICONS: Record<string, LucideIcon> = { 'file-text': FileText, receipt: Receipt, image: Image, book: Book, mail: Mail, folder: Folder, archive: Archive, scan: ScanLine }
+
+const cell = 'bg-panel border border-line rounded-xl px-3 py-2 text-left flex flex-col justify-between min-w-0 min-h-0 overflow-hidden active:bg-line relative h-full w-full'
 function Tile({ icon, title, lvl, text, sub, onClick }: { icon: ReactNode; title: string; lvl: Lvl | null; text: string; sub?: string; onClick?: () => void }) {
   return (
-    <button onClick={onClick} className="bg-panel border border-line rounded-2xl p-4 text-left flex flex-col gap-2 min-h-[150px] active:bg-line">
-      <div className="flex items-center gap-2 text-lg text-slate-300">{icon}{title}</div>
-      <div className="flex items-center gap-3">
-        <span className={`w-6 h-6 rounded-full shrink-0 ${lvl ? bg[lvl] : 'bg-line'}`} />
-        <span className="text-3xl font-bold leading-tight">{text}</span>
+    <button onClick={onClick} className={cell}>
+      <div className="flex items-center gap-1.5 text-base text-slate-300 w-full [&_svg]:w-5 [&_svg]:h-5 [&_svg]:shrink-0">{icon}<span className="truncate">{title}</span></div>
+      <div className="flex items-center gap-2 min-w-0 w-full">
+        <span className={`w-4 h-4 rounded-full shrink-0 ${lvl ? bg[lvl] : 'bg-line'}`} />
+        <span className="text-2xl font-bold leading-tight truncate">{text}</span>
       </div>
-      {sub && <div className="text-lg text-slate-300">{sub}</div>}
+      <div className="text-sm text-slate-300 truncate w-full min-h-[20px]">{sub}</div>
     </button>
   )
 }
@@ -80,31 +83,37 @@ export default function Home({ go }: { go: (t: TabId) => void }) {
       toast(r.all_ok ? 'Scanned and sent' : 'Scanned, but some steps failed', r.all_ok ? 'ok' : 'err')
     } catch (e) { if (!(e instanceof ApiError)) toast(errMsg(e)) } finally { setRunning(null); setBusy('scan', false) }
   }
+  const tiles: ReactNode[] = [
+    <Tile key="pr" icon={<Printer />} title="Printer" lvl={p[0]} text={p[1]} sub={p[2]} />,
+    <Tile key="sc" icon={<ScanLine />} title="Scanner" lvl={s[0]} text={s[1]} />,
+    ...(cfg?.presets ?? []).map((p) => {
+      const Ico = PRESET_ICONS[p.icon ?? ''] ?? ScanLine
+      return (
+        <button key={p.id} onClick={() => run(p)} disabled={!!running} className={`${cell} disabled:opacity-60`}>
+          <div className="flex items-center gap-1.5 text-base text-slate-300 pr-6 [&_svg]:w-5 [&_svg]:h-5">{running === p.id ? <Spinner size={20} /> : <Ico />}<span className="truncate">Scan preset</span></div>
+          <div className="text-xl font-bold leading-tight line-clamp-2">{p.label ?? p.id}</div>
+          {(p.needs_unlock || p.targets.length > 0) && <Lock size={20} className="absolute top-2 right-2 text-warn" />}
+        </button>
+      )
+    }),
+    <Tile key="fi" icon={<FolderOpen />} title="Files" lvl={null} text="Browse" sub="Shares and cloud" onClick={() => go('files')} />,
+    ...(cfg?.public_url ? [<Tile key="qr" icon={<Smartphone />} title="Print from phone" lvl={null} text="Show QR" onClick={() => setQr(true)} />] : []),
+    <Tile key="lb" icon={<Tag />} title="Label maker" lvl={l[0]} text={l[1]} sub={l[2]} onClick={() => go('labels')} />,
+    <Tile key="hj" icon={<Pause />} title="Held jobs" lvl={n === undefined ? null : n > 0 ? 'warn' : 'ok'} text={n === undefined ? '…' : String(n)} sub={n ? 'Tap to release' : 'Nothing waiting'} onClick={() => go('queue')} />,
+  ]
   return (
     <div className="h-full flex flex-col relative">
       <Title>Home</Title>
-      <div className="grid grid-cols-2 gap-3 flex-1 pb-2 content-start overflow-y-auto">
-        <Tile icon={<Printer />} title="Printer" lvl={p[0]} text={p[1]} sub={p[2]} />
-        <Tile icon={<ScanLine />} title="Scanner" lvl={s[0]} text={s[1]} />
-        {(cfg?.presets ?? []).map((p) => (
-          <button key={p.id} onClick={() => run(p)} disabled={!!running} className="bg-panel border border-line rounded-2xl p-4 text-left flex flex-col gap-2 min-h-[110px] active:bg-line relative disabled:opacity-60">
-            <div className="flex items-center gap-2 text-lg text-slate-300">{running === p.id ? <Spinner /> : <ScanLine />}Scan preset</div>
-            <div className="text-3xl font-bold leading-tight">{p.label ?? p.id}</div>
-            {p.needs_unlock && <Lock size={22} className="absolute top-3 right-3 text-warn" />}
-          </button>
-        ))}
-        <Tile icon={<FolderOpen />} title="Files" lvl={null} text="Browse" sub="Shares and cloud" onClick={() => go('files')} />
-        {cfg?.public_url && <Tile icon={<Smartphone />} title="Print from phone" lvl={null} text="Show QR" onClick={() => setQr(true)} />}
-        <Tile icon={<Tag />} title="Label maker" lvl={l[0]} text={l[1]} sub={l[2]} onClick={() => go('labels')} />
-        <Tile icon={<Pause />} title="Held jobs" lvl={n === undefined ? null : n > 0 ? 'warn' : 'ok'} text={n === undefined ? '…' : String(n)} sub={n ? 'Tap to release' : 'Nothing waiting'} onClick={() => go('queue')} />
-      </div>
+      <Pager items={tiles} cols={4} rows={3} className="flex-1" />
       {qr && cfg?.public_url && (
-        <div className="absolute inset-0 z-30 bg-black/90 flex items-center justify-center" onClick={() => setQr(false)}>
-          <div className="bg-panel border border-line rounded-2xl p-4 flex flex-col items-center gap-2">
+        <div className="fixed inset-0 z-30 bg-black/90 flex items-center justify-center" onClick={() => setQr(false)}>
+          <div className="bg-panel border border-line rounded-2xl p-4 flex items-center gap-4">
             <Qr text={cfg.public_url} size={280} />
-            <div className="text-xl font-bold">Scan to print from your phone</div>
-            <div className="text-slate-300">{cfg.public_url}</div>
-            <div className="text-slate-400">Tap anywhere to close. Jobs appear in Queue.</div>
+            <div className="flex flex-col gap-2 w-[360px]">
+              <div className="text-2xl font-bold">Scan to print from your phone</div>
+              <div className="text-slate-300 break-all">{cfg.public_url}</div>
+              <div className="text-slate-400">Tap anywhere to close. Jobs appear in Queue.</div>
+            </div>
           </div>
         </div>
       )}

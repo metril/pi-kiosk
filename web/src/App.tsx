@@ -1,7 +1,7 @@
 import { useCallback, useState, useSyncExternalStore } from 'react'
 import { Home as HomeI, FolderOpen, Tag, ScanLine, Copy as CopyI, ListOrdered, WifiOff } from 'lucide-react'
 import { offlineStore, setErrorHandler } from './api'
-import { ToastHost } from './components/ui'
+import { ToastHost, HdrCtx } from './components/ui'
 import { useBusy } from './store'
 import { Spinner } from './components/ui'
 import Idle from './components/Idle'
@@ -28,19 +28,19 @@ export default function App() {
   const busy = useBusy()
   const offline = useSyncExternalStore(offlineStore.sub, offlineStore.get)
   const bind = useCallback((h: Parameters<typeof setErrorHandler>[0]) => { setErrorHandler(h); return () => setErrorHandler(() => {}) }, [])
+  const [t, setT] = useState<HTMLElement | null>(null), [r, setR] = useState<HTMLElement | null>(null)
   return (
     <ToastHost bind={bind}>
-      <div className="flex w-[800px] h-[480px] bg-bg relative">
-        <nav className="w-20 h-full flex flex-col border-r border-line bg-panel">
-          {TABS.map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex-1 flex flex-col items-center justify-center gap-1 text-sm font-semibold border-l-4 ${tab === t.id ? 'bg-bg text-acc border-acc' : 'text-slate-300 border-transparent active:bg-line'}`}>
-              <span className="relative"><t.icon size={28} />{(t.id === 'copy' || t.id === 'scan') && busy[t.id] && <span className="absolute -top-1 -right-2"><Spinner size={16} /></span>}</span>{t.label}
-            </button>
-          ))}
-        </nav>
-        <main className="w-[720px] h-full p-2 pt-0 overflow-hidden relative">
-          {offline && <div className="absolute top-0 left-0 right-0 z-20 bg-err text-white font-bold px-4 py-2 flex items-center gap-2"><WifiOff size={22} />Offline: service unreachable. Retrying…</div>}
+      <HdrCtx.Provider value={{ t, r }}>
+      <div className="flex flex-col w-full h-full bg-bg relative">
+        <header className="h-12 shrink-0 flex items-center gap-2 px-2 border-b border-line">
+          <h1 ref={setT} className="text-2xl font-bold shrink-0" />
+          <div ref={setR} className="flex gap-2 items-center" />
+          <div className="flex-1" />
+          <SessionChip />
+        </header>
+        {offline && <div className="absolute top-0 left-0 right-0 h-12 z-20 bg-err text-white font-bold px-4 flex items-center gap-2"><WifiOff size={22} />Offline: service unreachable. Retrying…</div>}
+        <main className="flex-1 min-h-0 p-2 overflow-hidden relative">
           {tab === 'home' && <Home go={setTab} />}
           {tab === 'labels' && <Labels />}
           {tab === 'scan' && <Scan />}
@@ -48,10 +48,18 @@ export default function App() {
           {tab === 'files' && <Files />}
           {tab === 'queue' && <Queue />}
         </main>
-        <SessionChip />
+        <nav className="h-14 shrink-0 flex border-t border-line bg-panel">
+          {TABS.map((t) => (
+            <button key={t.id} onClick={() => setTab(t.id)}
+              className={`flex-1 flex flex-col items-center justify-center text-sm font-semibold border-t-4 ${tab === t.id ? 'bg-bg text-acc border-acc' : 'text-slate-300 border-transparent active:bg-line'}`}>
+              <span className="relative"><t.icon size={24} />{(t.id === 'copy' || t.id === 'scan') && busy[t.id] && <span className="absolute -top-1 -right-2"><Spinner size={14} /></span>}</span>{t.label}
+            </button>
+          ))}
+        </nav>
         <UnlockModal />
         <Idle />
       </div>
+      </HdrCtx.Provider>
     </ToastHost>
   )
 }

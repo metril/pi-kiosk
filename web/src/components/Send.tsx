@@ -27,6 +27,7 @@ export default function Send({ scanId, onClose, onDeleted }: { scanId: string; o
   const paperless = !!cfg?.destinations.paperless || !!cfg?.presets?.some((p) => p.targets.some((t) => t.type === 'paperless'))
   names.__ = ''
   contacts.forEach((c) => (names[c.id] = c.name))
+  cfg?.smb_shares?.forEach((s) => (names[s.id] = s.name))
   const has = (t: PresetTarget) => targets.some((x) => key(x) === key(t))
   const toggle = (t: PresetTarget) => setTargets((l) => (has(t) ? l.filter((x) => key(x) !== key(t)) : [...l, t]))
 
@@ -43,7 +44,7 @@ export default function Send({ scanId, onClose, onDeleted }: { scanId: string; o
 
   let body
   if (res) {
-    body = <div className="flex flex-col gap-2 overflow-y-auto">
+    body = <div className="flex flex-col gap-2 overflow-hidden">
       {Object.entries(res.post).map(([k, v]) => <div key={k} className={`rounded-xl p-3 text-lg ${v.ok ? 'bg-ok/20' : 'bg-err/30'}`}>{k.toUpperCase()}: {v.ok ? 'done' : 'failed'}</div>)}
       {res.results.map((r, i) => <div key={i} className={`rounded-xl p-3 text-lg flex items-center gap-2 ${r.ok ? 'bg-ok/20' : 'bg-err/30'}`}>{r.ok ? <Check className="text-ok" /> : <AlertCircle className="text-err" />}{label(targets[i], names)}: {r.ok ? 'sent' : r.error ?? `failed (${r.status ?? '?'})`}</div>)}
       {res.deleted && <div className="text-slate-300 p-1">Scan deleted</div>}
@@ -53,21 +54,22 @@ export default function Send({ scanId, onClose, onDeleted }: { scanId: string; o
   } else if (view === 'smb' || view === 'cloud') {
     body = <div className="min-h-0 flex-1"><Browse src={view} onPickFolder={(l) => { names[l.ref] = l.refName; toggle(l.src === 'smb' ? { type: 'smb', share_id: l.ref, path: l.path } : { type: 'cloud', provider_id: l.ref, path: l.path, ...(l.folder_id ? { folder_id: l.folder_id } : {}) }); setView('main') }} /></div>
   } else if (view === 'email') {
-    body = <div className="grid grid-cols-3 gap-2 overflow-y-auto">
+    body = <div data-scroll className="grid grid-cols-3 gap-2 overflow-y-auto content-start min-h-0 flex-1">
       {!contacts.length && <div className="text-slate-400 p-3">No contacts configured</div>}
       {contacts.map((c) => { const t: PresetTarget = { type: 'email', contact_id: c.id }; return <button key={c.id} className={`btn ${has(t) ? 'btn-acc' : ''}`} onClick={() => toggle(t)}>{c.name}</button> })}
     </div>
   } else {
     body = <>
       <div className="grid grid-cols-4 gap-2 shrink-0">
-        <button className="btn !flex-col !gap-0 !text-base" onClick={() => setView('smb')}><HardDrive />Share</button>
+        <button className="btn !flex-col !gap-0 !text-base !min-h-[56px]" onClick={() => setView('smb')}><HardDrive />Share</button>
         <button className="btn !flex-col !gap-0 !text-base" onClick={() => setView('cloud')}><Cloud />Cloud</button>
         {paperless ? <button className={`btn !flex-col !gap-0 !text-base ${has({ type: 'paperless' }) ? 'btn-acc' : ''}`} onClick={() => toggle({ type: 'paperless' })}><FileText />Paperless</button> : <span />}
         <button className="btn !flex-col !gap-0 !text-base" onClick={() => setView('email')}><Mail />Email</button>
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-1">
-        {!targets.length && <div className="text-slate-400 p-2">Pick one or more destinations</div>}
-        {targets.map((t) => <button key={key(t)} className="btn !justify-between" onClick={() => toggle(t)}><span className="truncate">{label(t, names)}</span><X size={20} /></button>)}
+      <div className="flex-1 min-h-0 overflow-hidden grid grid-cols-2 gap-1 content-start">
+        {!targets.length && <div className="text-slate-400 p-2 col-span-2">Pick one or more destinations</div>}
+        {targets.slice(0, 6).map((t) => <button key={key(t)} className="btn !justify-between !min-h-[44px] !text-base min-w-0" onClick={() => toggle(t)}><span className="truncate">{label(t, names)}</span><X size={20} className="shrink-0" /></button>)}
+        {targets.length > 6 && <div className="text-slate-400 p-1">+{targets.length - 6} more</div>}
       </div>
       <div className="flex gap-2 shrink-0"><Toggle on={ocr} set={setOcr}>OCR</Toggle><Toggle on={enh} set={setEnh}>Enhance</Toggle><Toggle on={del} set={setDel}>Delete after</Toggle></div>
       <button className="btn btn-ok shrink-0 text-xl" disabled={!targets.length || busy} onClick={go}>{busy ? <Spinner /> : <SendI />}Send to {targets.length || '…'}</button>
