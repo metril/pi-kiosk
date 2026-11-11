@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import { useConfig, syncConfigRev } from '../store'
+import { useConfig, syncConfigRev, setAsleepFlag } from '../store'
 import { usePoll } from '../hooks'
 
 /** Black overlay after idle; first touch wakes the screen and is swallowed. */
@@ -12,6 +12,7 @@ export default function Idle() {
   mins.current = cfg?.idle_minutes ?? 0
   const sleepRef = useRef(false)
   sleepRef.current = asleep
+  useEffect(() => { setAsleepFlag(asleep) }, [asleep])
 
   // Sync with server-side screen state (Home Assistant can switch it / reload the page).
   const { data: scr } = usePoll((sg) => api.screenState(sg), 2000)

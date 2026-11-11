@@ -31,11 +31,13 @@ async function mock(page: Page, st: { unlocked: boolean }) {
   const json = (route: any, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
   await page.route(/\/(papyrus|labels|kiosk)\//, (route) => {
     const u = new URL(route.request().url()); const p = u.pathname; const m = route.request().method()
-    if (p === '/kiosk/config') return json(route, { idle_minutes: 0, name: 'Kiosk', public_url: 'https://print.example.com/phone', unlock: { idle_s: 300, max_s: 900 }, presets, contacts, destinations: { paperless: true, smb: null, cloud: null, email: null } })
+    if (p === '/kiosk/contacts') return json(route, [{ id: 'me', name: 'Me (me@example.com)' }, ...contacts])
+    if (p === '/kiosk/config') return json(route, { idle_minutes: 0, name: 'Kiosk', public_url: 'https://print.example.com/phone', unlock: { idle_s: 300, max_s: 900 }, presets, destinations: { paperless: true, smb: null, cloud: null } })
     if (p === '/kiosk/unlock/state' || p === '/kiosk/unlock/touch' || p === '/kiosk/lock')
       return json(route, st.unlocked ? { state: 'unlocked', user: 'alexandra.longname', remaining_s: 540, idle_remaining_s: 200 } : { state: 'pending', qr_uri: 'https://auth.example.com/device?c=ABCD1234', user_code: 'ABCD-1234', expires_in: 300 })
     if (p === '/kiosk/unlock/start') return json(route, { state: 'pending', qr_uri: 'https://auth.example.com/device?c=ABCD1234', user_code: 'ABCD-1234', expires_in: 300 })
     if (p === '/kiosk/send') return json(route, { post: {}, results: [{ type: 'cloud', ok: true }, { type: 'smb', ok: true }, { type: 'paperless', ok: false, error: 'Upstream error' }], all_ok: false, deleted: false })
+    if (p === '/kiosk/status') return json(route, { printer_ready: true, scanner_ready: false })
     if (p === '/kiosk/screen') return json(route, { on: true, brightness: null, max: null, reload_seq: 0 })
     if (p === '/papyrus/printers/default/status') return json(route, { state: 3, state_message: 'Idle', accepting_jobs: true, state_reasons: [], markers: [{ name: 'Black', level: 8, color: '#000' }] })
     if (p === '/papyrus/scanners/default/status') return json(route, { available: true, device: 'x', busy: false })
@@ -130,8 +132,8 @@ test('every screen fits 800x480', async ({ page }) => {
   await page.getByLabel('Toggle view mode').click(); await page.waitForTimeout(600); await check(page, '21-viewer-scroll')
   await page.getByLabel('Close').click()
 
-  // unlock modal: go locked, tap a preset that needs unlock
+  // lock: the session ends server-side; the kiosk drops to the full-screen Lock screen
   st.unlocked = false
-  await tab(page, 'Home'); await page.waitForTimeout(5500)
-  await page.getByText('Paperless Documents').click(); await page.waitForSelector('text=Unlock with your phone'); await check(page, '22-unlock-modal')
+  await page.waitForSelector('text=ABCD-1234', { timeout: 15000 }); await check(page, '22-lock-screen')
+  expect(await page.locator('nav').count()).toBe(0)
 })

@@ -1,5 +1,5 @@
 export type Secret = { set: boolean } | string | null
-export interface Target { type: 'smb' | 'paperless' | 'email'; share_id?: string; path?: string; contact_id?: string }
+export interface Target { type: 'smb' | 'paperless' | 'email'; share_id?: string; path?: string; contact_id?: string; to?: string }
 export interface Preset {
   id: string; label: string; icon: string; scan: Record<string, unknown>
   post: { ocr?: boolean; enhance?: boolean }; delete_after: boolean; targets: Target[]

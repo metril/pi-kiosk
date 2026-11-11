@@ -1,36 +1,24 @@
 import { useSyncExternalStore } from 'react'
 import { api, setLockedHandler, type UnlockState } from './api'
+import { reloadConfig } from './store'
 
 type Fn = () => void
 const ls = new Set<Fn>()
 let state: UnlockState = { state: 'locked' }
-let modal = false
-let waiters: ((ok: boolean) => void)[] = []
+let everUnlocked = false
 const emit = () => ls.forEach((l) => l())
 const sub = (l: Fn) => (ls.add(l), () => void ls.delete(l))
 export const useSession = () => useSyncExternalStore(sub, () => state)
-export const useUnlockOpen = () => useSyncExternalStore(sub, () => modal)
+export const getSession = () => state
+/** True once this page load has seen an unlocked session (so a Lock press restarts sign-in at once). */
+export const wasUnlocked = () => everUnlocked
 
 export function setSession(s: UnlockState) {
+  const was = state.state === 'unlocked', now = s.state === 'unlocked'
   state = s
-  if (s.state === 'unlocked' && modal) closeUnlock(true)
+  if (now) everUnlocked = true
+  if (was !== now) reloadConfig(!now)  // drop sensitive config on lock, fetch full config on unlock
   emit()
 }
-export function openUnlock(): Promise<boolean> {
-  modal = true; emit()
-  return new Promise((r) => waiters.push(r))
-}
-export function closeUnlock(ok: boolean) {
-  modal = false
-  const w = waiters; waiters = []
-  w.forEach((r) => r(ok))
-  emit()
-}
-/** Resolves true if already unlocked or after the user unlocks. */
-export const ensureUnlocked = () => (state.state === 'unlocked' ? Promise.resolve(true) : openUnlock())
-setLockedHandler(() => {
-  if (state.state === 'unlocked') {  // stale local state: refresh, then let the retry decide
-    return api.unlockState().then((s) => { setSession(s); return s.state === 'unlocked' || openUnlock() }).catch(() => false)
-  }
-  return openUnlock()
-})
+// Fallback: any "locked" response means the server session is gone; drop to the Lock screen.
+setLockedHandler(() => { if (state.state === 'unlocked') setSession({ state: 'locked' }); api.unlockState().then(setSession).catch(() => {}) })

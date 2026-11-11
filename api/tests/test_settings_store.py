@@ -7,6 +7,8 @@ import httpx
 import pytest
 import respx
 
+from conftest import force_unlock
+
 from kiosk_api import mqtt
 from kiosk_api.config import Settings
 from kiosk_api.main import create_app
@@ -18,11 +20,11 @@ P, L = "http://pap.test", "http://lm.test"
 
 def stored(**cfg):
     c = {"name": "Hall", "public_url": "https://pub", "unlock": {"idle_s": 60, "max_s": 300},
-         "screen": {"idle_minutes": 9}, "contacts": ["a"],
+         "screen": {"idle_minutes": 9},
          "presets": [{"id": "p", "label": "P", "icon": "folder",
                       "targets": [{"type": "paperless"}]}],
          "labelmaker": {"url": L, "token": "T"}, "mqtt": None, **cfg}
-    return {"config": c, "contacts": [{"id": "a", "name": "Al", "email": "a@x"}],
+    return {"config": c,
             "smb_shares": [{"id": "1", "name": "Share"}]}
 
 
@@ -58,11 +60,11 @@ async def test_subscribe_and_applier(path):
 
 
 def test_env_fallback_and_null_disables():
-    env = Settings(labelmaker_url=L, mqtt_host="b", kiosk_contacts='[{"id":"e","email":"e@x"}]')
+    env = Settings(labelmaker_url=L, mqtt_host="b")
     assert effective(env, None) is env
     s = effective(env, parse(stored()))
     assert s.mqtt_host == "" and s.labelmaker_url == L and s.kiosk_name == "Hall"
-    assert [c["id"] for c in s.contacts()] == ["a"] and s.presets()[0]["needs_unlock"]
+    assert s.presets()[0]["needs_unlock"]
     assert s.idle_minutes == 9 and s.unlock_idle_s == 60 and s.papyrus_public_url == "https://pub"
     assert s.shares == [{"id": "1", "name": "Share"}]
     assert effective(env, parse(stored(labelmaker=None))).labelmaker_url == ""
@@ -81,20 +83,17 @@ def test_secret_semantics():
 @respx.mock
 async def test_refresh_cache_offline_keeps(path):
     st = SettingsStore(path)
-    await st.set_config(Config(contacts=["2"]))
+    await st.set_config(Config())
     async with httpx.AsyncClient() as c:
         async def call(m, p, token=None, **kw):
             try:
                 return await c.request(m, f"{P}/api/v1/{p}", headers={"Authorization": "Bearer S"})
             except httpx.HTTPError:
                 return None
-        respx.get(f"{P}/api/v1/contacts").respond(200, json=[
-            {"id": 2, "name": "B", "email": "b@x"}, {"id": 3, "name": "C", "email": "c@x"}])
         respx.get(f"{P}/api/v1/smb/shares").respond(200, json=[{"id": 1, "name": "S"}])
         assert await refresh_cache(st, call)
-        assert [x.id for x in st.current().contacts] == ["2"]
         assert st.current().smb_shares[0].name == "S"
-        respx.get(f"{P}/api/v1/contacts").mock(side_effect=httpx.ConnectError("down"))
+        respx.get(f"{P}/api/v1/smb/shares").mock(side_effect=httpx.ConnectError("down"))
         assert not await refresh_cache(st, call)
     assert SettingsStore(path).load()
 
@@ -105,14 +104,14 @@ async def test_hot_apply_and_labelmaker_swap(path, tmp_path):
     app = create_app(s)
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://k") as c:
+            force_unlock(app)
             with respx.mock:
-                respx.get(f"{P}/api/v1/contacts").respond(200, json=[])
                 respx.get(f"{P}/api/v1/smb/shares").respond(200, json=[])
                 await app.state.store.set_config(Config.model_validate(stored()["config"]))
-                await app.state.store.set_cache(parse(stored()).contacts, parse(stored()).smb_shares)
+                await app.state.store.set_cache(parse(stored()).smb_shares)
                 old = app.state.labels
                 d = (await c.get("/kiosk/config")).json()
-                assert d["contacts"] == [{"id": "a", "name": "Al"}] and d["name"] == "Hall"
+                assert d["name"] == "Hall"
                 assert d["presets"][0]["id"] == "p" and d["smb_shares"][0]["name"] == "Share"
                 rev = d["config_rev"]
                 assert (await c.get("/kiosk/screen")).json()["config_rev"] == rev
@@ -120,10 +119,10 @@ async def test_hot_apply_and_labelmaker_swap(path, tmp_path):
                 await c.get("/labels/health")
                 assert lm.calls[0].request.headers["authorization"] == "Bearer T"
                 await app.state.store.set_config(Config.model_validate(stored(
-                    contacts=[], labelmaker={"url": "http://lm2.test", "token": "U"},
+                    labelmaker={"url": "http://lm2.test", "token": "U"},
                     presets=[{"id": "q", "icon": "mail", "targets": []}])["config"]))
                 d = (await c.get("/kiosk/config")).json()
-                assert d["config_rev"] == rev + 1 and d["contacts"] == []
+                assert d["config_rev"] == rev + 1
                 assert [p["id"] for p in d["presets"]] == ["q"]
                 assert app.state.labels is not old and old.is_closed
                 lm2 = respx.get("http://lm2.test/api/v1/health").respond(200, json={})
@@ -158,7 +157,34 @@ async def test_mqtt_restart_only_on_mqtt_change():
     await m.stop()
 
 
-def test_papyrus_int_ids_coerced_to_str():
-    from kiosk_api.settings_store import Config
-    c = Config.model_validate({"contacts": [3, "4"]})
-    assert c.contacts == ["3", "4"]
+def test_legacy_migration(path):
+    body = stored(contacts=["a", "b"], presets=[{"id": "p", "targets": [
+        {"type": "email", "contact_id": "a"}, {"type": "paperless"}, {"type": "email", "to": "me"}]}],
+        legacy_key=1)
+    body["contacts"] = [{"id": "a", "name": "Al", "email": "a@x"}]
+    body["weird"] = {"x": 1}
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(body, f)
+    st = SettingsStore(path)
+    assert st.load()
+    t = st.current().config.presets[0].targets
+    assert t == [{"type": "email", "to": "me"}, {"type": "paperless"}, {"type": "email", "to": "me"}]
+    dumped = st.current().model_dump()
+    assert "contacts" not in dumped and "contacts" not in dumped["config"]
+
+
+def test_env_presets_email_migrated_without_settings_file():
+    tg = [{"type": "email", "contact_id": "5"}, {"type": "email", "to": "x@y.z"},
+          {"type": "email", "to": "me"}, {"type": "paperless"}]
+    out = Settings(kiosk_presets=json.dumps([{"id": "p", "targets": tg}])).presets()
+    out = [x for x in out if x["id"] == "p"]
+    assert out[0]["targets"] == [{"type": "email", "to": "me"}] * 3 + [{"type": "paperless"}]
+    out = Settings(presets_override=[{"id": "p", "targets": tg}]).presets()
+    assert out[0]["targets"][1] == {"type": "email", "to": "me"}
+
+
+def test_free_form_email_target_migrated_in_store_model():
+    c = Config.model_validate({"presets": [{"id": "p", "targets": [
+        {"type": "email", "to": "evil@x.z"}]}]})
+    assert c.presets[0].targets == [{"type": "email", "to": "me"}]

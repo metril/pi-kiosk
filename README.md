@@ -24,7 +24,7 @@ Three containers (`compose.yaml`):
 
 ## Configuration
 
-Settings live on the Pi (`/var/lib/pi-kiosk/settings.json`, mode 0600, `kioskconfig` volume) and are edited in the admin UI below; changes apply live (presets, contacts, timeouts, name, label maker, MQTT restarts only when its settings change). Contacts are references into the Papyrus address book (`GET /api/v1/contacts`); names/emails and SMB share names are resolved with the shared token and cached in the settings file for offline use. `GET /kiosk/config` and `GET /kiosk/screen` carry `config_rev`, which changes when the settings do.
+Settings live on the Pi (`/var/lib/pi-kiosk/settings.json`, mode 0600, `kioskconfig` volume) and are edited in the admin UI below; changes apply live (presets, timeouts, name, label maker, MQTT restarts only when its settings change). SMB share names are resolved with the shared token and cached in the settings file for offline use. Email goes only to the signed-in user (`{"type":"email","to":"me"}`) or one of their own personal Papyrus contacts (`GET /api/v1/contacts`, needs Papyrus 1.7.0); the kiosk never sends to a free-form address. `KIOSK_CONTACTS` and `SCAN_EMAIL_TO` are deprecated and ignored; old stored contact targets migrate to `to: "me"`. `GET /kiosk/config` and `GET /kiosk/screen` carry `config_rev`, which changes when the settings do.
 
 ## Admin UI: https://<pi-host>:8443
 
@@ -34,7 +34,7 @@ A separate server (same process, own port; none of the kiosk routes are reachabl
 - Behind a reverse proxy that terminates TLS, set `ADMIN_TLS=off` (plain HTTP to the proxy; the cookie stays Secure) and keep `ADMIN_BIND` private. HSTS is sent when `ADMIN_TLS` is on. A plain-HTTP LAN without a proxy needs `ADMIN_COOKIE_SECURE=false`.
 - Login limits (5 starts/min and 3 pending sign-ins per client IP, 20 overall; a sign-in whose browser stops polling for 30 s is dropped) key on the client IP. Behind a reverse proxy all clients share the proxy's IP unless you set `ADMIN_TRUSTED_PROXIES` (comma-separated proxy IPs whose `X-Forwarded-For` is trusted; default none).
 - Changing the label maker URL or MQTT host/port clears the stored key/password unless a new one is supplied; the Test buttons follow the same rule.
-- Contacts and SMB shares are managed in Papyrus (address book at `<papyrus>/contacts`); the kiosk token is managed at `<papyrus>/settings?tab=kiosks`.
+- SMB shares are managed in Papyrus; personal contacts are added per user in Papyrus Settings > Contacts; the kiosk token is managed at `<papyrus>/settings?tab=kiosks`.
 
 `.env` keeps only host-level settings:
 - `PAPYRUS_URL`, `PAPYRUS_TOKEN` (the kiosk token).
@@ -43,8 +43,15 @@ A separate server (same process, own port; none of the kiosk routes are reachabl
 - `BACKLIGHT_DEVICE` (varies by screen/kernel, detected by `host/setup.sh`): entry in `/sys/class/backlight`; only that device is mounted into `kiosk-api`. `host/setup.sh` installs `99-backlight.rules` so `bl_power` is writable by the non-root api user.
 - Legacy env overrides (`SCAN_*`, `KIOSK_PRESETS`, `MQTT_*`, ...) only seed the admin UI until the first save; see `.env.example`.
 
-Unlock: the kiosk is locked by default (scan, copy, labels, queue). Send-to, share/cloud browsing, remote print and delete need a phone sign-in (QR, Papyrus device grant, Papyrus 1.5.0+). The per-user token stays in `kiosk-api` memory only and is revoked on lock, idle/max timeout or restart. Locked proxy calls return `401 {"detail":"locked"}`.
-- Endpoints: `/kiosk/unlock/{start,state,touch}`, `/kiosk/lock`, `/kiosk/send`, `/kiosk/send/email`, `/kiosk/print/remote`, `/kiosk/print/scan/{id}`.
+### Access model
+
+The kiosk is locked by default and a locked kiosk shows only a full-screen sign-in screen (name, clock, printer/scanner ready dots, QR plus user code). Scanning, copying, labels, the print queue and files all require a phone sign-in (QR, Papyrus device grant, Papyrus 1.5.0+). The sign-in starts on first touch or wake and restarts on expiry only while the screen stays awake (honouring 429 `Retry-After`).
+
+- Enforced server-side in `kiosk-api`: while locked, every `/papyrus/*` and `/labels/*` call and every `/kiosk/send*` and `/kiosk/print/*` call returns `401 {"detail":"locked"}`.
+- Reachable while locked: `/kiosk/config` (non-sensitive fields only), `/kiosk/unlock/*`, `/kiosk/lock`, `/kiosk/screen*`, `/kiosk/status` (only `{printer_ready, scanner_ready}`) and static assets.
+- Unlocked, Papyrus calls use the user's token; label calls keep the LabelMaker token but still need an unlocked session. The per-user token stays in `kiosk-api` memory only and is revoked on lock, idle/max timeout or restart.
+- On lock (idle, Lock button, Home Assistant) the UI closes viewers and dialogs, drops in-memory scans, files and previews, and returns to the sign-in screen. MQTT/Home Assistant status publishing is unaffected.
+- Endpoints: `/kiosk/unlock/{start,state,touch}`, `/kiosk/lock`, `/kiosk/status`, `/kiosk/send`, `/kiosk/send/email`, `/kiosk/print/remote`, `/kiosk/print/scan/{id}`.
 
 ## Home Assistant
 

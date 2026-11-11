@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { X, Send as SendI, Mail, HardDrive, Cloud, FileText, Check, AlertCircle } from 'lucide-react'
-import { api, type PresetTarget, type SendResp } from '../api'
+import { api, type Contact, type PresetTarget, type SendResp } from '../api'
 import { useConfig } from '../store'
 import Browse from './Browse'
 import { Spinner, useToast, errMsg } from './ui'
@@ -8,7 +8,7 @@ import { Spinner, useToast, errMsg } from './ui'
 const label = (t: PresetTarget, names: Record<string, string>) =>
   t.type === 'smb' ? `Share: ${names[t.share_id!] ?? t.share_id}/${t.path ?? ''}`
   : t.type === 'cloud' ? `Cloud: ${names[t.provider_id!] ?? t.provider_id}/${t.path ?? ''}`
-  : t.type === 'email' ? `Email: ${names[t.contact_id!] ?? t.contact_id}` : 'Paperless'
+  : t.type === 'email' ? `Email: ${t.to === 'me' ? 'me' : names[t.contact_id!] ?? t.contact_id}` : 'Paperless'
 const key = (t: PresetTarget) => JSON.stringify(t)
 
 function Toggle({ on, set, children }: { on: boolean; set: (v: boolean) => void; children: string }) {
@@ -23,10 +23,11 @@ export default function Send({ scanId, onClose, onDeleted }: { scanId: string; o
   const [ocr, setOcr] = useState(false), [enh, setEnh] = useState(false), [del, setDel] = useState(false)
   const [busy, setBusy] = useState(false)
   const [res, setRes] = useState<SendResp | null>(null)
-  const contacts = cfg?.contacts ?? []
+  const [contacts, setContacts] = useState<Contact[] | null>(null)
+  useEffect(() => { if (view === 'email' && !contacts) api.contacts().then(setContacts).catch((e) => { if (e?.code !== 'locked') toast(errMsg(e)); setContacts([]) }) }, [view])
   const paperless = !!cfg?.destinations.paperless || !!cfg?.presets?.some((p) => p.targets.some((t) => t.type === 'paperless'))
   names.__ = ''
-  contacts.forEach((c) => (names[c.id] = c.name))
+  contacts?.forEach((c) => (names[c.id] = c.name))
   cfg?.smb_shares?.forEach((s) => (names[s.id] = s.name))
   const has = (t: PresetTarget) => targets.some((x) => key(x) === key(t))
   const toggle = (t: PresetTarget) => setTargets((l) => (has(t) ? l.filter((x) => key(x) !== key(t)) : [...l, t]))
@@ -54,9 +55,10 @@ export default function Send({ scanId, onClose, onDeleted }: { scanId: string; o
   } else if (view === 'smb' || view === 'cloud') {
     body = <div className="min-h-0 flex-1"><Browse src={view} onPickFolder={(l) => { names[l.ref] = l.refName; toggle(l.src === 'smb' ? { type: 'smb', share_id: l.ref, path: l.path } : { type: 'cloud', provider_id: l.ref, path: l.path, ...(l.folder_id ? { folder_id: l.folder_id } : {}) }); setView('main') }} /></div>
   } else if (view === 'email') {
-    body = <div data-scroll className="grid grid-cols-3 gap-2 overflow-y-auto content-start min-h-0 flex-1">
-      {!contacts.length && <div className="text-slate-400 p-3">No contacts configured</div>}
-      {contacts.map((c) => { const t: PresetTarget = { type: 'email', contact_id: c.id }; return <button key={c.id} className={`btn ${has(t) ? 'btn-acc' : ''}`} onClick={() => toggle(t)}>{c.name}</button> })}
+    body = <div data-scroll className="flex flex-col gap-2 overflow-y-auto min-h-0 flex-1">
+      {!contacts && <div className="p-3"><Spinner /></div>}
+      {contacts?.map((c) => { const t: PresetTarget = c.id === 'me' ? { type: 'email', to: 'me' } : { type: 'email', contact_id: c.id }; return <button key={c.id} className={`btn shrink-0 !justify-start ${has(t) ? 'btn-acc' : ''}`} onClick={() => toggle(t)}><span className="truncate">{c.name}</span></button> })}
+      {contacts && contacts.length <= 1 && <div className="text-slate-400 p-3">Add contacts in Papyrus → Settings → Contacts</div>}
     </div>
   } else {
     body = <>

@@ -1,6 +1,6 @@
-import { useCallback, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { Home as HomeI, FolderOpen, Tag, ScanLine, Copy as CopyI, ListOrdered, WifiOff } from 'lucide-react'
-import { offlineStore, setErrorHandler } from './api'
+import { api, offlineStore, setErrorHandler } from './api'
 import { ToastHost, HdrCtx } from './components/ui'
 import { useBusy } from './store'
 import { Spinner } from './components/ui'
@@ -11,7 +11,10 @@ import Scan from './screens/Scan'
 import CopyScreen from './screens/Copy'
 import Queue from './screens/Queue'
 import Files from './screens/Files'
-import { UnlockModal, SessionChip } from './components/Unlock'
+import { SessionChip } from './components/Unlock'
+import LockScreen from './components/LockScreen'
+import { useSession, setSession } from './session'
+import { usePoll } from './hooks'
 
 const TABS = [
   { id: 'home', label: 'Home', icon: HomeI },
@@ -26,6 +29,11 @@ export type TabId = (typeof TABS)[number]['id']
 export default function App() {
   const [tab, setTab] = useState<TabId>('home')
   const busy = useBusy()
+  const sess = useSession()
+  const unlocked = sess.state === 'unlocked'
+  // Track the server session while unlocked (the Lock screen polls its own flow).
+  usePoll((sg) => (unlocked ? api.unlockState(sg).then(setSession) : Promise.resolve()), 5000)
+  useEffect(() => { if (!unlocked) setTab('home') }, [unlocked])
   const offline = useSyncExternalStore(offlineStore.sub, offlineStore.get)
   const bind = useCallback((h: Parameters<typeof setErrorHandler>[0]) => { setErrorHandler(h); return () => setErrorHandler(() => {}) }, [])
   const [t, setT] = useState<HTMLElement | null>(null), [r, setR] = useState<HTMLElement | null>(null)
@@ -33,6 +41,7 @@ export default function App() {
     <ToastHost bind={bind}>
       <HdrCtx.Provider value={{ t, r }}>
       <div className="flex flex-col w-full h-full bg-bg relative">
+        {!unlocked ? <LockScreen /> : <>
         <header className="h-12 shrink-0 flex items-center gap-2 px-2 border-b border-line">
           <h1 ref={setT} className="text-2xl font-bold shrink-0" />
           <div ref={setR} className="flex gap-2 items-center" />
@@ -56,7 +65,7 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <UnlockModal />
+        </>}
         <Idle />
       </div>
       </HdrCtx.Provider>

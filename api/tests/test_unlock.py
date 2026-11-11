@@ -10,7 +10,8 @@ from kiosk_api.main import create_app
 
 P = "http://pap.test"
 A = f"{P}/api/v1"
-CONTACTS = json.dumps([{"id": "bob", "name": "Bob", "email": "bob@x.test"}])
+MINE = [{"id": 7, "name": "Bob", "email": "bob@x.test"}]
+ME = {"id": 1, "email": "a@x.test", "display_name": "Ann", "role": "user"}
 CODE = {"device_code": "dc", "user_code": "ABCD-EFGH", "interval": 0, "expires_in": 300,
         "verification_uri": "http://pap.test/device",
         "verification_uri_complete": "http://pap.test/device?code=ABCD-EFGH"}
@@ -34,7 +35,7 @@ def clock():
 async def ak(tmp_path, clock):
     """(client, app) with a mocked clock."""
     s = Settings(papyrus_url=P, papyrus_token="PTOK", backlight_path=str(tmp_path),
-                 static_dir=str(tmp_path), kiosk_contacts=CONTACTS, unlock_idle_s=60,
+                 static_dir=str(tmp_path), unlock_idle_s=60,
                  unlock_max_s=300, papyrus_public_url="https://pub.test")
     app = create_app(s)
     app.state.unlock.clock = clock
@@ -172,29 +173,39 @@ async def test_unlocked_proxy_uses_user_token_email_blocked(ak):
 async def test_scans_list_mine(ak):
     c, _ = ak
     g = respx.get(f"{A}/scans").respond(200, json=[])
+    await do_unlock(c)
     await c.get("/papyrus/scans?mine=false&x=1")
     q = g.calls[0].request.url.params
     assert q["mine"] == "true" and q["x"] == "1"
-    assert g.calls[0].request.headers["authorization"] == "Bearer PTOK"
-    await do_unlock(c)
-    await c.get("/papyrus/scans")
-    assert g.calls[1].request.headers["authorization"] == "Bearer UTOK"
+    assert g.calls[0].request.headers["authorization"] == "Bearer UTOK"
 
 
 @respx.mock
 async def test_email_contacts_only(ak):
     c, _ = ak
-    assert (await c.post("/kiosk/send/email", json={"scan_id": "a1", "contact_id": "bob"})).status_code == 401
+    assert (await c.post("/kiosk/send/email", json={"scan_id": "a1", "contact_id": 7})).status_code == 401
+    assert (await c.get("/kiosk/contacts")).status_code == 401
     await do_unlock(c)
     e = respx.post(f"{A}/scans/a1/email").respond(200, json={})
-    r = await c.post("/kiosk/send/email", json={"scan_id": "a1", "contact_id": "evil@x.test"})
+    respx.get(f"{A}/contacts").respond(200, json=MINE)
+    me = respx.get(f"{A}/auth/me").respond(200, json=ME)
+    for body in ({"contact_id": 99}, {"contact_id": "evil@x.test"}, {"to": "evil@x.test"},
+                 {"to": "evil@x.test", "contact_id": 7}):
+        r = await c.post("/kiosk/send/email", json={"scan_id": "a1", **body})
+        assert r.status_code == 400 and not e.called
+    r = await c.post("/kiosk/send", json={"scan_id": "a1", "targets": [{"type": "email", "to": "evil@x.test"}]})
     assert r.status_code == 400 and not e.called
-    r = await c.post("/kiosk/send/email", json={"scan_id": "a1", "to": "evil@x.test"})
-    assert r.status_code == 400 and not e.called
-    r = await c.post("/kiosk/send/email", json={"scan_id": "a1", "contact_id": "bob"})
-    assert r.status_code == 200
-    assert json.loads(e.calls[0].request.content)["to"] == "bob@x.test"
-    assert e.calls[0].request.headers["authorization"] == "Bearer UTOK"
+    r = await c.post("/kiosk/send/email", json={"scan_id": "a1", "to": "me"})
+    assert r.status_code == 200 and json.loads(e.calls[0].request.content)["to"] == "a@x.test"
+    assert me.calls[0].request.headers["authorization"] == "Bearer UTOK"
+    r = await c.post("/kiosk/send/email", json={"scan_id": "a1", "contact_id": 7})
+    assert r.status_code == 200 and json.loads(e.calls[1].request.content)["to"] == "bob@x.test"
+    assert e.calls[1].request.headers["authorization"] == "Bearer UTOK"
+    r = await c.post("/kiosk/send", json={"scan_id": "a1", "targets": [{"type": "email", "to": "me"}]})
+    assert r.json()["all_ok"] and json.loads(e.calls[2].request.content)["to"] == "a@x.test"
+    r = await c.get("/kiosk/contacts")
+    assert r.json() == [{"id": "me", "name": "Me (a@x.test)"}, {"id": "7", "name": "Bob"}]
+    assert "bob@x.test" not in r.text
 
 
 @respx.mock
@@ -259,11 +270,14 @@ async def test_remote_print_streams_and_uploads(ak):
     assert r.status_code == 400
 
 
-async def test_config_exposes_presets_contacts(ak):
+@respx.mock
+async def test_config_exposes_presets(ak):
     c, _ = ak
     d = (await c.get("/kiosk/config")).json()
-    assert d["contacts"] == [{"id": "bob", "name": "Bob"}]
-    assert "email" not in json.dumps(d["contacts"])
+    assert "contacts" not in d and "presets" not in d and "smb_shares" not in d
+    await do_unlock(c)
+    d = (await c.get("/kiosk/config")).json()
+    assert "contacts" not in d
     assert d["presets"][0]["id"] == "default" and d["presets"][0]["targets"] == [{"type": "paperless"}]
     assert d["unlock"] == {"idle_s": 60, "max_s": 300} and d["public_url"] == "https://pub.test"
 
@@ -273,7 +287,7 @@ def test_presets_env_and_bad_json():
                  scan_paperless=False)
     ids = [p["id"] for p in s.presets()]
     assert ids == ["default", "x"] and s.presets()[1]["needs_unlock"]
-    assert Settings(kiosk_presets="{bad", kiosk_contacts="nope").contacts() == []
+    assert Settings(kiosk_presets="{bad")._json_list("{bad") == []
 
 
 async def test_mqtt_lock_and_payload(ak):
@@ -303,12 +317,11 @@ async def test_session_token_for_all_papyrus_proxy_calls(ak):
         ("GET", "scans/a1/download"): respx.get(f"{A}/scans/a1/download").respond(200),
     }
     for (m, p) in routes:
-        assert (await c.request(m, f"/papyrus/{p}")).status_code == 200
-    assert all(r.calls[0].request.headers["authorization"] == "Bearer PTOK" for r in routes.values())
+        assert (await c.request(m, f"/papyrus/{p}")).status_code == 401
     await do_unlock(c)
     for (m, p), r in routes.items():
-        await c.request(m, f"/papyrus/{p}")
-        assert r.calls[1].request.headers["authorization"] == "Bearer UTOK", p
+        assert (await c.request(m, f"/papyrus/{p}")).status_code == 200
+        assert r.calls[0].request.headers["authorization"] == "Bearer UTOK", p
 
 
 @respx.mock
@@ -415,3 +428,57 @@ async def test_remote_print_size_cap_and_spool_default(tmp_path):
             r = await c.post("/kiosk/print/remote", json={"source": "smb", "ref": "s1", "path": "/a"})
         assert r.status_code == 413 and not up.called
         respx.delete(f"{A}/auth/tokens/t1").respond(204)
+
+
+async def _inject(app, clock):
+    from kiosk_api.session import UnlockSession
+    app.state.unlock.session = UnlockSession("u", "UTOK", "t1", clock.t, clock.t)
+
+
+@respx.mock
+async def test_get_polls_do_not_keep_session_alive(ak, clock):
+    c, app = ak
+    await _inject(app, clock)
+    respx.get(f"{A}/jobs").respond(200, json=[])
+    for _ in range(4):
+        clock.t += 20
+        await c.get("/papyrus/jobs")
+    assert app.state.unlock.expired()
+    clock.t += 1
+    assert (await c.get("/papyrus/jobs")).status_code in (401, 403, 423)
+
+
+@respx.mock
+async def test_mutating_proxy_touches(ak, clock):
+    c, app = ak
+    await _inject(app, clock)
+    respx.delete(f"{A}/scans/j1").respond(204)
+    clock.t += 50
+    await c.delete("/papyrus/scans/j1")
+    clock.t += 50
+    assert not app.state.unlock.expired()
+
+
+@respx.mock
+async def test_busy_send_survives_idle_but_not_max(ak, clock):
+    c, app = ak
+    u = app.state.unlock
+    await _inject(app, clock)
+
+    def slow(request):
+        clock.t += 100  # > idle_s (60)
+        return httpx.Response(200, json={})
+    respx.post(f"{A}/scans/s1/ocr").mock(side_effect=slow)
+    respx.post(f"{A}/scans/s1/paperless").respond(200, json={})
+    r = await c.post("/kiosk/send", json={"scan_id": "s1", "targets": [{"type": "paperless"}],
+                                          "post": {"ocr": True}})
+    assert r.status_code == 200
+    assert u.busy_n == 0 and not u.expired()
+    async with u.busy():
+        clock.t += 100
+        await u.reap()
+        assert u.session is not None
+        clock.t += 300  # past max_s
+        assert u.expired()
+    await u.reap()
+    assert u.session is None

@@ -3,6 +3,16 @@ import json
 from pydantic_settings import BaseSettings
 
 
+def migrate_targets(p: dict) -> dict:
+    """Email targets other than the signed-in user's own address become {to: me}."""
+    ts = p.get("targets")
+    if isinstance(ts, list):
+        p = {**p, "targets": [{"type": "email", "to": "me"} if isinstance(t, dict)
+                              and t.get("type") == "email" and t != {"type": "email", "to": "me"}
+                              else t for t in ts]}
+    return p
+
+
 class Settings(BaseSettings):
     papyrus_url: str = "http://papyrus:8000"
     papyrus_token: str = ""
@@ -15,11 +25,10 @@ class Settings(BaseSettings):
     scan_smb_share_id: str = ""
     scan_smb_path: str = ""
     scan_cloud_provider_id: str = ""
-    scan_email_to: str = ""
+    scan_email_to: str = ""  # deprecated, ignored (email goes to the signed-in user via "me")
     papyrus_public_url: str = ""
     unlock_idle_s: int = 120
     unlock_max_s: int = 900
-    kiosk_contacts: str = ""  # JSON: [{"id","name","email"}]
     kiosk_presets: str = ""  # JSON: [{"id","label","icon","scan":{},"post":{},"targets":[]}]
     mqtt_host: str = ""
     mqtt_port: int = 1883
@@ -42,7 +51,6 @@ class Settings(BaseSettings):
     admin_cert_dir: str = "/var/lib/pi-kiosk"
     settings_path: str = "/var/lib/pi-kiosk/settings.json"
     # Set from the stored settings (not env): None/empty means "use the env values".
-    contacts_override: list[dict] | None = None
     presets_override: list[dict] | None = None
     shares: list[dict] = []
     mqtt_ca_pem: str = ""
@@ -60,19 +68,13 @@ class Settings(BaseSettings):
             return []
         return [x for x in d if isinstance(x, dict)] if isinstance(d, list) else []
 
-    def contacts(self) -> list[dict]:
-        if self.contacts_override is not None:
-            return self.contacts_override
-        return [c for c in self._json_list(self.kiosk_contacts)
-                if c.get("id") and c.get("email")]
-
     def presets(self) -> list[dict]:
         if self.presets_override is not None:
-            out = [dict(p) for p in self.presets_override]
+            out = [migrate_targets(dict(p)) for p in self.presets_override]
             for p in out:
                 p["needs_unlock"] = bool(p.get("targets"))
             return out
-        out = [p for p in self._json_list(self.kiosk_presets) if p.get("id")]
+        out = [migrate_targets(p) for p in self._json_list(self.kiosk_presets) if p.get("id")]
         if not any(p["id"] == "default" for p in out):
             targets = []
             if self.scan_paperless:
@@ -82,9 +84,6 @@ class Settings(BaseSettings):
                                 "path": self.scan_smb_path})
             if self.scan_cloud_provider_id:
                 targets.append({"type": "cloud", "provider_id": self.scan_cloud_provider_id})
-            c = next((c for c in self.contacts() if c["email"] == self.scan_email_to), None)
-            if c:
-                targets.append({"type": "email", "contact_id": c["id"]})
             out.insert(0, {"id": "default", "label": "Scan", "icon": "scan",
                            "scan": {}, "post": {}, "targets": targets})
         for p in out:

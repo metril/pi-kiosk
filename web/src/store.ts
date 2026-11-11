@@ -21,19 +21,33 @@ export const useBusy = () => useSyncExternalStore(busy.sub, busy.get)
 /** Kiosk runtime config: fetched once at start, retried every 30s until it succeeds. */
 const cfg = makeStore<KioskConfig | null>(null)
 let started = false
+let gen = 0
+const load = (g: number) => api.kioskConfig().then((c) => { if (g === gen) cfg.set(c) }).catch(() => { if (g === gen) setTimeout(() => load(g), g ? 5_000 : 30_000) })
 export function startConfig() {
   if (started) return
   started = true
-  const load = () => api.kioskConfig().then(cfg.set).catch(() => setTimeout(load, 30_000))
-  load()
+  load(gen)
 }
+/** Refetch config (after unlock/lock); clear=true drops the old (sensitive) copy first. */
+export function reloadConfig(clear: boolean) {
+  gen++
+  if (clear) cfg.set(null)
+  started = true
+  load(gen)
+}
+
+/** True while the black idle overlay is up. */
+const asleep = makeStore(false)
+export const setAsleepFlag = asleep.set
+export const useAsleep = () => useSyncExternalStore(asleep.sub, asleep.get)
 /** Refetch /kiosk/config when the polled config_rev differs from the loaded one (no reload). */
 let fetching: number | string | undefined
 export function syncConfigRev(rev: number | string | undefined) {
   const cur = cfg.get()
   if (rev === undefined || !cur || cur.config_rev === rev || fetching === rev) return
   fetching = rev
-  api.kioskConfig().then(cfg.set).catch(() => {}).finally(() => { fetching = undefined })
+  const g = gen
+  api.kioskConfig().then(c => { if (g === gen) cfg.set(c) }).catch(() => {}).finally(() => { fetching = undefined })
 }
 export function useConfig() {
   useEffect(startConfig, [])

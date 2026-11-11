@@ -293,8 +293,7 @@ def create_admin_app(kiosk: FastAPI, *, tls: bool = True, cookie_secure: bool = 
     def view() -> dict:
         cur = ks.store.current()
         return {"config": mask(cur.config if cur else seed(ks.base)), "persisted": bool(cur),
-                "cache": {"contacts": [c.model_dump() for c in cur.contacts] if cur else [],
-                          "smb_shares": [x.model_dump() for x in cur.smb_shares] if cur else []},
+                "cache": {"smb_shares": [x.model_dump() for x in cur.smb_shares] if cur else []},
                 "links": links()}
 
     @app.get("/admin/api/settings")
@@ -307,7 +306,6 @@ def create_admin_app(kiosk: FastAPI, *, tls: bool = True, cookie_secure: bool = 
         old = cur.config if cur else seed(ks.base)
         try:
             cfg = Config.model_validate(merge_secrets(old, body.get("config") or {}))
-            old_contacts = cur.config.contacts if cur else None
             await ks.store.set_config(cfg)
         except ValidationError as e:
             return JSONResponse({"error": {"code": "invalid", "detail": _errs(e)}}, 422)
@@ -316,8 +314,8 @@ def create_admin_app(kiosk: FastAPI, *, tls: bool = True, cookie_secure: bool = 
         except OSError:
             log.exception("settings not written")
             return err("write_failed", 500)
-        if cfg.contacts != old_contacts or not cur:
-            asyncio.create_task(ks.refresh())  # resolve names/emails for offline use
+        if not cur:
+            asyncio.create_task(ks.refresh())  # resolve share names for offline use
         return view()
 
     # ---- Papyrus pickers (admin's own token) ----

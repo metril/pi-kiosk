@@ -1,5 +1,5 @@
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string) { super(message) }
+  constructor(public status: number, public code: string, message: string, public retryAfter?: number) { super(message) }
 }
 
 type Listener = () => void
@@ -24,12 +24,12 @@ function parseErr(status: number, body: any): ApiError {
   return new ApiError(status, code, msg)
 }
 
-/** Opened on any 401 "locked"; resolves true once unlocked (request is then retried once). */
-let onLocked: (() => Promise<boolean>) | null = null
-export const setLockedHandler = (h: (() => Promise<boolean>) | null) => { onLocked = h }
+/** Fallback on any 401 "locked" (server says locked): drop to the Lock screen. */
+let onLocked: (() => void) | null = null
+export const setLockedHandler = (h: (() => void) | null) => { onLocked = h }
 
 /** quiet: caller handles errors itself (no global toast). */
-async function req<T>(method: string, path: string, body?: unknown, quiet = false, signal?: AbortSignal, retried = false): Promise<T> {
+async function req<T>(method: string, path: string, body?: unknown, quiet = false, signal?: AbortSignal): Promise<T> {
   try {
     const r = await fetch(path, {
       method,
@@ -43,9 +43,11 @@ async function req<T>(method: string, path: string, body?: unknown, quiet = fals
     setOffline(r.status === 502 && data?.error?.code === 'upstream_unreachable')
     if (!r.ok) {
       const pe = parseErr(r.status, data)
+      const ra = Number(r.headers.get('Retry-After'))
+      if (ra > 0) pe.retryAfter = ra
       if (r.status === 401 && data?.detail === 'locked') {
         pe.code = 'locked'
-        if (!retried && onLocked && (await onLocked())) return await req<T>(method, path, body, quiet, signal, true)
+        onLocked?.()
         throw pe
       }
       if (r.status === 504 && pe.code === 'upstream_timeout') pe.message = 'Still working upstream — check the printer before retrying'
@@ -79,7 +81,7 @@ export interface LabelStatus { connected: boolean; error: string | null; error_c
 export interface Preset { id: string; name: string; favorite: boolean; label_type: string; tape_family: string; tape_width_mm: number | null }
 export interface HistoryItem { id: string; status: string; label_count: number; kind: string; created_at: string; error: string | null; thumbnail_url: string | null }
 export interface LabelJob { id: string; status: string; error: string | null; label_count: number }
-export interface PresetTarget { type: 'paperless' | 'smb' | 'cloud' | 'email'; share_id?: string; path?: string; provider_id?: string; folder_id?: string; contact_id?: string }
+export interface PresetTarget { type: 'paperless' | 'smb' | 'cloud' | 'email'; share_id?: string; path?: string; provider_id?: string; folder_id?: string; contact_id?: string; to?: string }
 export interface KioskPreset {
   id: string; label?: string; icon?: string; needs_unlock: boolean
   scan?: Partial<ScanReq>; post?: { ocr?: boolean; enhance?: boolean }; targets: PresetTarget[]; delete_after?: boolean
@@ -95,13 +97,14 @@ export interface SendResp { post: Record<string, { ok: boolean }>; results: Send
 export interface SmbShare { id: string; name: string }
 export interface Entry { name: string; path: string; is_dir: boolean; id?: string; mime?: string; size?: number }
 export interface Provider { id: string; name: string }
+export interface KioskStatus { printer_ready: boolean; scanner_ready: boolean }
 export interface KioskConfig {
   idle_minutes: number
   name?: string; public_url?: string; config_rev?: number | string
   smb_shares?: { id: string; name: string }[]
   unlock?: { idle_s: number; max_s: number }
-  presets?: KioskPreset[]; contacts?: Contact[]
-  destinations: { paperless: boolean; smb: { share_id: string; path: string } | null; cloud: { provider_id: string } | null; email: { to: string } | null }
+  presets?: KioskPreset[]
+  destinations: { paperless: boolean; smb: { share_id: string; path: string } | null; cloud: { provider_id: string } | null }
 }
 export interface ScreenState { config_rev?: number | string; on: boolean; brightness: number | null; max: number | null; reload_seq: number }
 export type Sig = AbortSignal
@@ -127,12 +130,14 @@ export const api = {
   reprint: (id: string) => post<{ job_id: string }>(`/labels/history/${id}/reprint`),
   labelJob: (id: string, sg?: Sig) => get<LabelJob>(`/labels/print/jobs/${id}`, true, sg),
   cancelLabel: (id: string) => post<unknown>(`/labels/print/jobs/${id}/cancel`),
+  kioskStatus: (sg?: Sig) => get<KioskStatus>('/kiosk/status', true, sg),
   kioskConfig: (sg?: Sig) => get<KioskConfig>('/kiosk/config', true, sg),
   unlockStart: () => post<UnlockState>('/kiosk/unlock/start', undefined, true),
   unlockState: (sg?: Sig) => get<UnlockState>('/kiosk/unlock/state', true, sg),
   unlockTouch: () => post<UnlockState>('/kiosk/unlock/touch', undefined, true),
   lock: () => post<UnlockState>('/kiosk/lock', undefined, true),
   send: (b: { scan_id: string; targets: PresetTarget[]; post?: { ocr?: boolean; enhance?: boolean }; delete_after?: boolean }) => post<SendResp>('/kiosk/send', b, true),
+  contacts: (sg?: Sig) => get<Contact[]>('/kiosk/contacts', true, sg),
   sendEmail: (scan_id: string, contact_id: string) => post<SendResult>('/kiosk/send/email', { scan_id, contact_id }, true),
   printRemote: (b: { source: 'smb' | 'cloud'; ref: string; path: string; file_id?: string; copies: number; duplex: boolean }) => post<unknown>('/kiosk/print/remote', b),
   printScan: (id: string, copies: number, duplex: boolean) => post<unknown>(`/kiosk/print/scan/${id}`, { copies, duplex }),

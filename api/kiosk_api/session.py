@@ -1,6 +1,7 @@
 """In-memory unlock session (never persisted, never sent to the browser)."""
 import asyncio
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
 
@@ -30,6 +31,7 @@ class Unlock:
     flow: str = "locked"  # locked | pending | denied | expired | error
     flow_info: dict = field(default_factory=dict)
     listeners: list = field(default_factory=list)
+    busy_n: int = 0  # in-flight long operations; suspend idle expiry
     gen: int = 0  # bumped by lock()/unlock_start(); stales in-flight polls
 
     def _notify(self):
@@ -41,10 +43,20 @@ class Unlock:
         if not s:
             return False
         now = self.clock()
-        return now - s.last_activity >= self.idle_s or now - s.started >= self.max_s
+        return (self.busy_n <= 0 and now - s.last_activity >= self.idle_s) \
+            or now - s.started >= self.max_s
 
     def active(self) -> UnlockSession | None:
         return self.session if self.session and not self.expired() else None
+
+    @asynccontextmanager
+    async def busy(self):
+        self.busy_n += 1
+        try:
+            yield
+        finally:
+            self.touch()
+            self.busy_n -= 1
 
     def touch(self):
         if self.active():

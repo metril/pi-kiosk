@@ -26,32 +26,27 @@ def _c(*pats: str) -> list[re.Pattern]:
     return [re.compile(p.replace("{id}", ID)) for p in pats]
 
 
-ALLOW_LOCKED = {
+# Everything proxied needs an unlock session (locked kiosk shows only the sign-in screen).
+# Papyrus calls use the user's token; label calls keep the LABELMAKER token. Email is never proxied.
+ALLOW = {
     "papyrus": {
         "GET": _c(
             "system/health", "printers/default/status", "scanners/default/status",
             "scanners/default/options", "scan-profiles", "scans",
             "scans/{id}/thumbnail", "scans/{id}/download", "jobs", "jobs/{id}/thumbnail",
+            "smb/shares", "smb/browse/{id}", "smb/download/{id}", "cloud/providers",
+            "cloud/files/{id}", "cloud/download/{id}", "email/config",
         ),
-        "POST": _c("scans", "copy", "jobs/{id}/release", "jobs/{id}/cancel"),
+        "POST": _c("scans", "copy", "jobs/{id}/release", "jobs/{id}/cancel",
+                   "scans/{id}/(?:smb|cloud|paperless|ocr|enhance|backs)",
+                   "scans/collate", "jobs/upload"),
+        "DELETE": _c("scans/{id}"),
     },
     "labels": {
         "GET": _c("health", "presets", "printer/status", "history",
                   "history/{id}/thumbnail", "print/jobs/{id}"),
         "POST": _c("presets/{id}/print", "history/{id}/reprint",
                    "print/jobs/{id}/cancel"),
-    },
-}
-# Need an unlock session; the user's token is injected. Email is never proxied.
-ALLOW_UNLOCKED = {
-    "papyrus": {
-        "GET": _c(
-            "smb/shares", "smb/browse/{id}", "smb/download/{id}", "cloud/providers",
-            "cloud/files/{id}", "cloud/download/{id}", "email/config",
-        ),
-        "POST": _c("scans/{id}/(?:smb|cloud|paperless|ocr|enhance|backs)",
-                   "scans/collate", "jobs/upload"),
-        "DELETE": _c("scans/{id}"),
     },
 }
 # All Papyrus paths the kiosk calls itself, in one place.
@@ -68,7 +63,7 @@ PP = {
     "cloud_download": "cloud/download/{id}",
     "jobs_upload": "jobs/upload",
 }
-TGT_STR = {"type", "share_id", "provider_id", "contact_id", "path", "folder_id"}
+TGT_STR = {"type", "share_id", "provider_id", "contact_id", "to", "path", "folder_id"}
 LONG = _c("copy", "scans", "jobs/upload", "scans/{id}/(?:smb|cloud|paperless|ocr|enhance|backs)",
           "scans/collate")
 DROP_REQ = {"authorization", "cookie", "host", "content-length", "connection",
@@ -88,14 +83,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     scr = Screen(s.backlight_path)
     unlock = Unlock(s.unlock_idle_s, s.unlock_max_s)
     flow: dict = {"task": None}
-    contacts: dict = {}
     upstreams: dict = {}
 
     def apply_settings():
-        """Re-derive effective settings; closures below read s/contacts/upstreams live."""
-        nonlocal s, contacts
+        """Re-derive effective settings; closures below read s/upstreams live."""
+        nonlocal s
         s = effective(base, store.current())
-        contacts = {c["id"]: c for c in s.contacts()}
         upstreams["papyrus"] = (s.papyrus_url.rstrip("/"), s.papyrus_token)
         upstreams["labels"] = (s.labelmaker_url.rstrip("/"), s.labelmaker_token)
         unlock.idle_s, unlock.max_s = s.unlock_idle_s, s.unlock_max_s
@@ -187,24 +180,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/kiosk/config")
     async def config():
-        return {
+        pub = {
             "config_rev": store.rev,
             "idle_minutes": s.idle_minutes,
             "name": s.kiosk_name,
             "public_url": s.papyrus_public_url.rstrip("/"),
             "unlock": {"idle_s": s.unlock_idle_s, "max_s": s.unlock_max_s},
+        }
+        if not unlock.active():
+            return pub
+        return {
+            **pub,
             "presets": s.presets(),
             "smb_shares": s.shares,
-            "contacts": [{"id": c["id"], "name": c.get("name") or c["id"]} for c in contacts.values()],
             "destinations": {
                 "paperless": s.scan_paperless,
                 "smb": {"share_id": s.scan_smb_share_id, "path": s.scan_smb_path}
                 if s.scan_smb_share_id else None,
                 "cloud": {"provider_id": s.scan_cloud_provider_id}
                 if s.scan_cloud_provider_id else None,
-                "email": {"to": s.scan_email_to} if s.scan_email_to else None,
             },
         }
+
+    @app.get("/kiosk/status")
+    async def kiosk_status():
+        """Locked-screen readiness: two booleans via the shared token, nothing else."""
+        pr, sc = await asyncio.gather(pcall("GET", "printers/default/status"),
+                                      pcall("GET", "scanners/default/status"))
+
+        def js(r):
+            try:
+                return r.json() if r is not None and r.is_success else {}
+            except ValueError:
+                return {}
+        p, c = js(pr), js(sc)
+        return {"printer_ready": bool(p and p.get("accepting_jobs") and p.get("state") != 5),
+                "scanner_ready": bool(c.get("available") and not c.get("busy"))}
 
     # ---- unlock ----
     def err(code: str, status: int, **kw):
@@ -251,16 +262,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await unlock.lock()
         return unlock.snapshot()
 
-    def session_token():
-        """Active session token (touching it), or None."""
+    def session_token(touch: bool = False):
+        """Active session token (optionally touching it), or None."""
         if unlock.active():
-            unlock.touch()
+            if touch:
+                unlock.touch()
             return unlock.session.token
         return None
 
     # ---- send / print ----
     def bad_id(*vals) -> bool:
         return any(not isinstance(v, str) or not re.fullmatch(ID, v) for v in vals)
+
+    async def user_contacts(token: str) -> list[dict] | None:
+        r = await pcall("GET", "contacts", token)
+        try:
+            d = r.json() if r is not None and r.status_code == 200 else None
+        except ValueError:
+            return None
+        return [c for c in d if isinstance(c, dict)] if isinstance(d, list) else None
+
+    async def my_email(token: str) -> str | None:
+        r = await pcall("GET", "auth/me", token)
+        try:
+            e = r.json().get("email") if r is not None and r.status_code == 200 else None
+        except (ValueError, AttributeError):
+            return None
+        return e if isinstance(e, str) and e else None
+
+    async def resolve_email(tgt: dict, token: str) -> str | None:
+        """Address for {to:"me"} or {contact_id} (one of the user's own contacts); never free-form."""
+        if tgt.get("to") == "me":
+            return await my_email(token)
+        cid = tgt.get("contact_id")
+        if cid is None or isinstance(cid, bool):
+            return None
+        for c in await user_contacts(token) or []:
+            if str(c.get("id")) == str(cid) and c.get("email"):
+                return c["email"]
+        return None
 
     async def send_one(scan_id: str, tgt: dict, token: str) -> dict:
         typ = tgt.get("type")
@@ -281,17 +321,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     params[k] = tgt[k]
             r = await pcall("POST", PP["scan_cloud"].format(id=scan_id), token, 600, params=params)
         elif typ == "email":
-            c = contacts.get(tgt.get("contact_id"))
-            if not c:
+            to = await resolve_email(tgt, token)
+            if not to:
                 return {**res, "error": "unknown_contact"}
             r = await pcall("POST", PP["scan_email"].format(id=scan_id), token, 120, json={
-                "to": c["email"], "subject": f"Scan from {s.kiosk_name}",
+                "to": to, "subject": f"Scan from {s.kiosk_name}",
                 "body": f"Scanned on {s.kiosk_name}."})
         else:
             return {**res, "error": "bad_target"}
         if r is None:
             return {**res, "error": "upstream_unreachable"}
         return {**res, "ok": r.is_success, "status": r.status_code}
+
+    @app.get("/kiosk/contacts")
+    async def kiosk_contacts():
+        token = session_token()
+        if not token:
+            return locked()
+        me, cs = await asyncio.gather(my_email(token), user_contacts(token))
+        out = [{"id": "me", "name": f"Me ({me})" if me else "Me"}]
+        out += [{"id": str(c["id"]), "name": c.get("name") or str(c["id"])}
+                for c in cs or [] if c.get("id") is not None]
+        return out
 
     @app.post("/kiosk/send/email")
     async def send_email(body: dict):
@@ -301,14 +352,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         sid = body.get("scan_id")
         if bad_id(sid):
             return err("bad_request", 400)
-        if body.get("contact_id") not in contacts:
+        tgt = {"type": "email", "to": body.get("to"), "contact_id": body.get("contact_id")}
+        if body.get("to") is not None and body.get("to") != "me":
             return err("unknown_contact", 400)
-        res = await send_one(sid, {"type": "email", "contact_id": body["contact_id"]}, token)
+        to = await resolve_email(tgt, token)
+        if not to:
+            return err("unknown_contact", 400)
+        res = await send_one(sid, tgt, token)
         return JSONResponse(res, 200 if res["ok"] else 502)
 
     @app.post("/kiosk/send")
     async def send(body: dict):
-        token = session_token()
+        token = session_token(touch=True)
         if not token:
             return locked()
         sid = body.get("scan_id")
@@ -323,6 +378,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 v is None or isinstance(v, str) for t in targets
                 for k, v in t.items() if k in TGT_STR):
             return err("bad_request", 400)
+        for t in targets:
+            if t.get("type") == "email" and (t.get("to") not in (None, "me")
+                                             or not await resolve_email(t, token)):
+                return err("unknown_contact", 400)
+        async with unlock.busy():
+            return await do_send(sid, targets, post, body, token)
+
+    async def do_send(sid, targets, post, body, token):
         post_res = {}
         for step in ("ocr", "enhance"):
             if post.get(step):
@@ -339,8 +402,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             deleted = bool(r is not None and r.is_success)
         return {"post": post_res, "results": results, "all_ok": all_ok, "deleted": deleted}
 
-    async def relay_print(dl_path: str, dl_params: dict, token: str, filename: str,
-                          copies: int, duplex: bool, media: str | None):
+    async def relay_print(*a):
+        async with unlock.busy():
+            return await _relay_print(*a)
+
+    async def _relay_print(dl_path: str, dl_params: dict, token: str, filename: str,
+                           copies: int, duplex: bool, media: str | None):
         """Stream the download from Papyrus into a temp file, then multipart-POST it as a job."""
         base = upstreams["papyrus"][0]
         cap = s.print_max_bytes
@@ -394,7 +461,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/kiosk/print/remote")
     async def print_remote(body: dict):
-        token = session_token()
+        token = session_token(touch=True)
         if not token:
             return locked()
         src, ref, path = body.get("source"), body.get("ref"), body.get("path")
@@ -409,7 +476,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/kiosk/print/scan/{scan_id}")
     async def print_scan(scan_id: str, body: dict | None = None):
-        token = session_token()
+        token = session_token(touch=True)
         if not token:
             return locked()
         if bad_id(scan_id):
@@ -447,20 +514,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if name == "labels" and not pbase:
             return JSONResponse({"error": {"code": "not_configured"}}, 503)
         params = request.query_params.multi_items()
-        if any(p.fullmatch(path) for p in ALLOW_LOCKED[name].get(method, [])):
-            if name == "papyrus":
-                sess = unlock.active()
-                if sess:  # session token for every call; shared token only when locked
-                    token = sess.token
-                if method == "GET" and path == "scans":
-                    session_token()
-                    params = [(k, v) for k, v in params if k != "mine"] + [("mine", "true")]
-        elif any(p.fullmatch(path) for p in ALLOW_UNLOCKED.get(name, {}).get(method, [])):
-            token = session_token()
-            if not token:
-                return locked()
-        else:
+        if not any(p.fullmatch(path) for p in ALLOW[name].get(method, [])):
             return JSONResponse({"error": {"code": "not_found"}}, 404)
+        utok = session_token(touch=method in ("POST", "PUT", "DELETE"))
+        if not utok:
+            return locked()
+        if name == "papyrus":
+            token = utok
+            if method == "GET" and path == "scans":
+                params = [(k, v) for k, v in params if k != "mine"] + [("mine", "true")]
         headers = {k: v for k, v in request.headers.items() if k.lower() not in DROP_REQ}
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -508,7 +570,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not root.is_dir():
             return JSONResponse({"error": {"code": "static_missing"}}, 404)
         f = (root / path).resolve()
-        if path and path != "admin.html" and f.is_file() and f.is_relative_to(root):
+        if path and f != (root / "admin.html").resolve() and f.is_file() \
+                and f.is_relative_to(root):
             return FileResponse(f)
         index = root / "index.html"
         if index.is_file():

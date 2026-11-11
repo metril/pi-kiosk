@@ -1,11 +1,10 @@
 import type { ReactNode } from 'react'
 import { useState } from 'react'
-import { Printer, ScanLine, Tag, Pause, FolderOpen, Smartphone, Lock, FileText, Receipt, Image, Book, Mail, Folder, Archive, type LucideIcon } from 'lucide-react'
+import { Printer, ScanLine, Tag, Pause, FolderOpen, Smartphone, FileText, Receipt, Image, Book, Mail, Folder, Archive, type LucideIcon } from 'lucide-react'
 import { api, ApiError, type KioskPreset } from '../api'
 import { usePoll } from '../hooks'
 import { Title, Pager, Spinner, useToast, errMsg } from '../components/ui'
 import { useConfig, setBusy, isBusy } from '../store'
-import { ensureUnlocked } from '../session'
 import { Qr } from '../components/Unlock'
 import type { TabId } from '../App'
 
@@ -74,7 +73,6 @@ export default function Home({ go }: { go: (t: TabId) => void }) {
     if (running || isBusy('scan')) return
     setRunning(p.id); setBusy('scan', true)
     try {
-      if (p.needs_unlock && !(await ensureUnlocked())) return
       const sc = p.scan ?? {}
       const s = await api.startScan({ resolution: 300, mode: 'Color', format: 'pdf', source: 'Flatbed', ...sc })
       if (s.status === 'failed') return toast(s.error_message || 'Scan failed')
@@ -92,7 +90,6 @@ export default function Home({ go }: { go: (t: TabId) => void }) {
         <button key={p.id} onClick={() => run(p)} disabled={!!running} className={`${cell} disabled:opacity-60`}>
           <div className="flex items-center gap-1.5 text-base text-slate-300 pr-6 [&_svg]:w-5 [&_svg]:h-5">{running === p.id ? <Spinner size={20} /> : <Ico />}<span className="truncate">Scan preset</span></div>
           <div className="text-xl font-bold leading-tight line-clamp-2">{p.label ?? p.id}</div>
-          {(p.needs_unlock || p.targets.length > 0) && <Lock size={20} className="absolute top-2 right-2 text-warn" />}
         </button>
       )
     }),

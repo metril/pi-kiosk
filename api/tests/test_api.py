@@ -5,6 +5,8 @@ import respx
 from kiosk_api.config import Settings
 from kiosk_api.main import create_app
 
+from conftest import force_unlock
+
 P, L = "http://pap.test", "http://lm.test"
 
 
@@ -22,13 +24,26 @@ def env(tmp_path):
     return s, bl
 
 
-@pytest.fixture
-async def client(env):
+async def _mk(env, unlocked):
     app = create_app(env[0])
     async with app.router.lifespan_context(app):
+        if unlocked:
+            force_unlock(app)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                      base_url="http://k") as c:
             yield c
+
+
+@pytest.fixture
+async def client(env):  # unlocked session
+    async for c in _mk(env, True):
+        yield c
+
+
+@pytest.fixture
+async def locked_client(env):
+    async for c in _mk(env, False):
+        yield c
 
 
 @pytest.mark.parametrize("path", [
@@ -56,7 +71,7 @@ async def test_denied(client, method, path):
     assert not respx.calls
 
 
-@pytest.mark.parametrize("path,tok", [("/papyrus/jobs", "PTOK"), ("/labels/health", "LTOK")])
+@pytest.mark.parametrize("path,tok", [("/papyrus/jobs", "UTOK"), ("/labels/health", "LTOK")])
 @respx.mock
 async def test_token_and_scrub(client, path, tok):
     up = P if "papyrus" in path else L
@@ -180,20 +195,72 @@ async def test_hop_by_hop_stripped(client):
     assert r.headers["x-keep"] == "ok"
 
 
-async def test_config_destinations(client, env):
+async def test_config_destinations(client, locked_client, env):
+    assert "destinations" not in (await locked_client.get("/kiosk/config")).json()
     d = (await client.get("/kiosk/config")).json()
-    assert d["destinations"] == {"paperless": True, "smb": None, "cloud": None, "email": None}
+    assert d["destinations"] == {"paperless": True, "smb": None, "cloud": None}
     s = env[0].model_copy(update={
         "scan_paperless": False, "scan_smb_share_id": "s1", "scan_smb_path": "/x",
         "scan_cloud_provider_id": "c1", "scan_email_to": "a@b.c"})
     app = create_app(s)
+    force_unlock(app)
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                  base_url="http://k") as c:
         d = (await c.get("/kiosk/config")).json()
     assert d["destinations"] == {"paperless": False, "smb": {"share_id": "s1", "path": "/x"},
-                                 "cloud": {"provider_id": "c1"}, "email": {"to": "a@b.c"}}
+                                 "cloud": {"provider_id": "c1"}}
 
 
 def test_module_exposes_factory():
     import kiosk_api.main as m
     assert callable(m.create_app) and not hasattr(m, "app")
+
+
+@pytest.mark.parametrize("method,path", [
+    ("POST", "/papyrus/scans"), ("POST", "/papyrus/copy"), ("GET", "/papyrus/jobs"),
+    ("GET", "/papyrus/printers/default/status"), ("GET", "/papyrus/system/health"),
+    ("GET", "/labels/presets"), ("POST", "/labels/presets/1/print"),
+    ("GET", "/labels/printer/status"), ("POST", "/kiosk/print/remote"),
+    ("POST", "/kiosk/print/scan/a1"), ("POST", "/kiosk/send")])
+@respx.mock
+async def test_locked_is_401(locked_client, method, path):
+    r = await locked_client.request(method, path, json={})
+    assert r.status_code == 401 and r.json() == {"detail": "locked"}
+    assert not respx.calls
+
+
+@respx.mock
+async def test_unlocked_passes_with_tokens(client):
+    p = respx.post(f"{P}/api/v1/copy").respond(200, json={})
+    j = respx.get(f"{P}/api/v1/jobs").respond(200, json={})
+    lb = respx.get(f"{L}/api/v1/presets").respond(200, json=[])
+    for m, u in (("POST", "/papyrus/copy"), ("GET", "/papyrus/jobs"), ("GET", "/labels/presets")):
+        assert (await client.request(m, u)).status_code == 200
+    assert p.calls[0].request.headers["authorization"] == "Bearer UTOK"
+    assert j.calls[0].request.headers["authorization"] == "Bearer UTOK"
+    assert lb.calls[0].request.headers["authorization"] == "Bearer LTOK"
+
+
+@respx.mock
+async def test_locked_status_only_two_booleans(locked_client):
+    pr = respx.get(f"{P}/api/v1/printers/default/status").respond(
+        200, json={"state": 3, "accepting_jobs": True, "secret": "x"})
+    respx.get(f"{P}/api/v1/scanners/default/status").respond(
+        200, json={"available": True, "busy": False, "device": "usb:1"})
+    r = await locked_client.get("/kiosk/status")
+    assert r.json() == {"printer_ready": True, "scanner_ready": True}
+    assert pr.calls[0].request.headers["authorization"] == "Bearer PTOK"
+    respx.get(f"{P}/api/v1/scanners/default/status").respond(500)
+    assert (await locked_client.get("/kiosk/status")).json() == {
+        "printer_ready": True, "scanner_ready": False}
+
+
+async def test_admin_html_not_served_via_path_variants(env):
+    s = env[0]
+    (__import__("pathlib").Path(s.static_dir) / "admin.html").write_text("ADMIN")
+    async for c in _mk(env, False):
+        for p in ("/admin.html", "/./admin.html", "/%2e/admin.html", "/x/../admin.html",
+                  "/%2e%2e/%2e%2e/etc/passwd"):
+            r = await c.get(p)
+            assert "ADMIN" not in r.text and "root:" not in r.text, p
+        assert (await c.get("/a.js")).text == "js"

@@ -1,6 +1,6 @@
 """Local kiosk settings, edited via the admin UI and persisted on the Pi.
 
-The file holds config plus a cache of Papyrus-resolved contacts / SMB share names
+The file holds config plus a cache of Papyrus-resolved SMB share names
 (for offline use). Never a user/session token.
 """
 import asyncio
@@ -10,9 +10,9 @@ import os
 from urllib.parse import urlsplit
 from typing import Any, Awaitable, Callable, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from .config import Settings
+from .config import Settings, migrate_targets
 
 log = logging.getLogger("kiosk.config")
 
@@ -26,12 +26,6 @@ SECRETS = {"labelmaker": "token", "mqtt": "password"}
 
 class _M(BaseModel):
     model_config = ConfigDict(extra="ignore", coerce_numbers_to_str=True)  # Papyrus ids are ints
-
-
-class Contact(_M):
-    id: str
-    name: str = ""
-    email: str = ""
 
 
 class Share(_M):
@@ -58,6 +52,14 @@ class Preset(BaseModel):
     delete_after: bool = False
     targets: list[dict] = []
 
+    @field_validator("targets", mode="before")
+    @classmethod
+    def _migrate_email(cls, v):
+        """Legacy kiosk-wide contact targets become the signed-in user's own address."""
+        if not isinstance(v, list):
+            return v
+        return migrate_targets({"targets": v})["targets"]
+
 
 class Labelmaker(_M):
     url: str = Field(pattern=URL_RE)
@@ -81,7 +83,6 @@ class Config(_M):
     public_url: str = ""
     unlock: Unlock = Unlock()
     screen: Screen = Screen()
-    contacts: list[str] = []
     presets: list[Preset] = []
     labelmaker: Labelmaker | None = None
     mqtt: Mqtt | None = None
@@ -89,7 +90,6 @@ class Config(_M):
 
 class Stored(_M):
     config: Config
-    contacts: list[Contact] = []  # resolved from the Papyrus address book, cached
     smb_shares: list[Share] = []
     updated_at: str | None = None
 
@@ -104,7 +104,6 @@ def seed(base: Settings) -> Config:
         name=base.kiosk_name, public_url=base.papyrus_public_url,
         unlock=Unlock(idle_s=base.unlock_idle_s, max_s=base.unlock_max_s),
         screen=Screen(idle_minutes=base.idle_minutes),
-        contacts=[c["id"] for c in base.contacts()],
         presets=[Preset.model_validate(p) for p in base.presets()
                  if isinstance(p.get("id"), str)],
         labelmaker=Labelmaker(url=base.labelmaker_url, token=base.labelmaker_token)
@@ -168,14 +167,12 @@ def effective(base: Settings, st: Stored | None) -> Settings:
     if st is None:
         return base
     c = st.config
-    by_id = {x.id: x.model_dump() for x in st.contacts}
     upd = {
         "kiosk_name": c.name or base.kiosk_name,
         "idle_minutes": c.screen.idle_minutes,
         "papyrus_public_url": c.public_url,
         "unlock_idle_s": c.unlock.idle_s,
         "unlock_max_s": c.unlock.max_s,
-        "contacts_override": [by_id[i] for i in c.contacts if by_id.get(i, {}).get("email")],
         "presets_override": [p.model_dump() for p in c.presets],
         "shares": [x.model_dump() for x in st.smb_shares],
         "labelmaker_url": c.labelmaker.url if c.labelmaker else "",
@@ -267,15 +264,15 @@ class SettingsStore:
 
     async def set_config(self, cfg: Config):
         cur = self._st
-        await self._commit(Stored(config=cfg, contacts=cur.contacts if cur else [],
+        await self._commit(Stored(config=cfg,
                                   smb_shares=cur.smb_shares if cur else []))
 
-    async def set_cache(self, contacts: list[Contact], shares: list[Share]) -> bool:
+    async def set_cache(self, shares: list[Share]) -> bool:
         cur = self._st
-        if cur is None or (cur.contacts == contacts and cur.smb_shares == shares):
+        if cur is None or cur.smb_shares == shares:
             return False
         try:
-            await self._commit(Stored(config=cur.config, contacts=contacts, smb_shares=shares))
+            await self._commit(Stored(config=cur.config, smb_shares=shares))
         except OSError as e:
             log.warning("settings cache not written: %r", e)
             return False
@@ -286,22 +283,17 @@ Call = Callable[..., Awaitable[Any]]
 
 
 async def refresh_cache(store: SettingsStore, call: Call) -> bool:
-    """Resolve referenced contacts and SMB share names from Papyrus (shared token) and cache
+    """Resolve SMB share names from Papyrus (shared token) and cache
     them. Offline/any failure keeps the previous cache."""
     cur = store.current()
     if cur is None:
         return False
     try:
-        rc = await call("GET", "contacts")
         rs = await call("GET", "smb/shares")
-        contacts, shares = list(cur.contacts), list(cur.smb_shares)
-        if rc is not None and rc.status_code == 200:
-            want = set(cur.config.contacts)
-            contacts = [Contact.model_validate({**x, "id": str(x["id"])}) for x in rc.json()
-                        if str(x.get("id")) in want]
+        shares = list(cur.smb_shares)
         if rs is not None and rs.status_code == 200:
             shares = [Share.model_validate({**x, "id": str(x["id"])}) for x in rs.json()]
     except Exception as e:  # transport, bad JSON, bad shape
         log.info("settings cache refresh failed: %r", e)
         return False
-    return await store.set_cache(contacts, shares)
+    return await store.set_cache(shares)
