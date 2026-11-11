@@ -23,7 +23,7 @@ export function Contacts({ cfg, set, view }: P & { view: View }) {
   const [list, setList] = useState<Contact[] | null>(null)
   const [err, setErr] = useState('')
   const [q, setQ] = useState('')
-  useEffect(() => { api<Contact[]>('papyrus/contacts').then(setList).catch((e: ApiError) => { setErr(e.message); setList(view.cache.contacts) }) }, [view.cache.contacts])
+  useEffect(() => { api<Contact[]>('papyrus/contacts').then((r) => setList(r.map((c) => ({ ...c, id: String(c.id) })))).catch((e: ApiError) => { setErr(e.message); setList(view.cache.contacts) }) }, [view.cache.contacts])
   const shown = (list ?? []).filter((c) => (c.name + c.email).toLowerCase().includes(q.toLowerCase()))
   const toggle = (id: string) => set((c) => { c.contacts = c.contacts.includes(id) ? c.contacts.filter((x) => x !== id) : [...c.contacts, id] })
   return (
@@ -127,8 +127,8 @@ export function Presets({ cfg, set, view }: P & { view: View }) {
   const [contacts, setContacts] = useState<Contact[]>(view.cache.contacts)
   const [opts, setOpts] = useState<Record<string, unknown> | null>(null)
   useEffect(() => {
-    api<Share[]>('papyrus/smb/shares').then(setShares).catch(() => {})
-    api<Contact[]>('papyrus/contacts').then(setContacts).catch(() => {})
+    api<Share[]>('papyrus/smb/shares').then((r) => setShares(r.map((s) => ({ ...s, id: String(s.id) })))).catch(() => {})
+    api<Contact[]>('papyrus/contacts').then((r) => setContacts(r.map((c) => ({ ...c, id: String(c.id) })))).catch(() => {})
     api<Record<string, unknown>>('papyrus/scanners/default/options').then(setOpts).catch(() => {})
   }, [])
   const sel = useMemo(() => contacts.filter((c) => cfg.contacts.includes(c.id)), [contacts, cfg.contacts])

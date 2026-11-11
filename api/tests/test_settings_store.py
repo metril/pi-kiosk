@@ -156,3 +156,9 @@ async def test_mqtt_restart_only_on_mqtt_change():
     await m.apply(effective(base, parse(stored(mqtt=None))))
     assert m.task is None
     await m.stop()
+
+
+def test_papyrus_int_ids_coerced_to_str():
+    from kiosk_api.settings_store import Config
+    c = Config.model_validate({"contacts": [3, "4"]})
+    assert c.contacts == ["3", "4"]

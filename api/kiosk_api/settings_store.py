@@ -25,7 +25,7 @@ SECRETS = {"labelmaker": "token", "mqtt": "password"}
 
 
 class _M(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", coerce_numbers_to_str=True)  # Papyrus ids are ints
 
 
 class Contact(_M):
