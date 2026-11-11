@@ -4,7 +4,8 @@ import { api, list, type Entry, type Provider, type SmbShare } from '../api'
 import { Spinner } from './ui'
 
 export type Src = 'smb' | 'cloud'
-export interface Loc { src: Src; ref: string; refName: string; path: string; folder_id: string }
+// kind: cloud provider type. Papyrus folder_id is a folder id for gdrive, a path for dropbox/onedrive/webdav.
+export interface Loc { src: Src; ref: string; refName: string; kind: string; path: string; folder_id: string }
 export interface Picked extends Loc { entry: Entry }
 
 const isDir = (e: any) => !!(e.is_dir ?? e.is_directory ?? e.isDir ?? ['dir', 'directory', 'folder'].includes(e.type))
@@ -37,7 +38,12 @@ export default function Browse({ src, onFile, onPickFolder }: { src: Src; onFile
     return () => { live = false }
   }, [loc])
 
-  const enter = (e: Entry) => { if (loc) { setStack((s) => [...s, loc]); setLoc({ ...loc, path: e.path || join(loc.path, e.name), folder_id: e.id ?? '' }) } }
+  const enter = (e: Entry) => {
+    if (!loc) return
+    const path = e.path || join(loc.path, e.name)
+    setStack((s) => [...s, loc])
+    setLoc({ ...loc, path, folder_id: loc.kind === 'gdrive' ? e.id ?? '' : '/' + path.replace(/^\//, '') })
+  }
   const back = () => { const s = stack.slice(); const p = s.pop(); setStack(s); setLoc(p ?? null) }
   const Ico = src === 'smb' ? HardDrive : Cloud
 
@@ -46,7 +52,7 @@ export default function Browse({ src, onFile, onPickFolder }: { src: Src; onFile
   if (!loc) return (
     <div className="grid grid-cols-2 gap-2 overflow-y-auto">
       {!roots.length && <div className="text-slate-400 p-3">{src === 'smb' ? 'No shares' : 'No cloud providers'}</div>}
-      {roots.map((r) => { const n = rootName(r); return <button key={r.id} className="btn !justify-start" onClick={() => setLoc({ src, ref: String(r.id), refName: n, path: '', folder_id: '' })}><Ico />{n}</button> })}
+      {roots.map((r) => { const n = rootName(r); return <button key={r.id} className="btn !justify-start" onClick={() => setLoc({ src, ref: String(r.id), refName: n, kind: (r as any).provider ?? '', path: '', folder_id: '' })}><Ico />{n}</button> })}
     </div>
   )
   return (
