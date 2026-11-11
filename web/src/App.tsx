@@ -64,7 +64,9 @@ export default function App() {
           {TABS.map((t) => (
             <button key={t.id} onClick={() => setTab(t.id)}
               className={`flex-1 flex flex-col items-center justify-center text-sm font-semibold border-t-4 ${tab === t.id ? 'bg-bg text-acc border-acc' : 'text-slate-300 border-transparent active:bg-line'}`}>
-              <span className="relative"><t.icon size={24} />{(t.id === 'copy' || t.id === 'scan') && busy[t.id] && <span className="absolute -top-1 -right-3 rounded-full bg-panel p-0.5"><Spinner size={16} className="text-acc" /></span>}</span>{t.label}
+              {(t.id === 'copy' || t.id === 'scan') && busy[t.id]
+                ? <><Spinner size={26} className="text-acc" /><span className="text-acc">{t.id === 'scan' ? 'Scanning…' : 'Copying…'}</span></>
+                : <><t.icon size={24} />{t.label}</>}
             </button>
           ))}
         </nav>
