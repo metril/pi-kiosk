@@ -1,11 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
-export XDG_RUNTIME_DIR=/run/user/0
+# cage refuses to run as root, so seatd (root) brokers DRM/input devices and
+# cage + chromium run as the unprivileged kiosk user.
+KIOSK_UID="$(id -u kiosk)"
+export HOME=/home/kiosk
+export XDG_RUNTIME_DIR="/run/user/$KIOSK_UID"
 export LIBSEAT_BACKEND=seatd
 export SEATD_SOCK=/run/seatd.sock
 mkdir -p "$XDG_RUNTIME_DIR"
+chown kiosk:kiosk "$XDG_RUNTIME_DIR"
 chmod 0700 "$XDG_RUNTIME_DIR"
+
+# Chromium opens the GPU render node directly: join the host's device groups.
+GROUPS_CSV="$(stat -c %g /dev/dri/* 2>/dev/null | sort -u | paste -sd, -)"
 
 SEATD_PID=""
 CAGE_PID=""
@@ -16,7 +24,7 @@ cleanup() {
 trap 'cleanup; exit 0' TERM INT
 
 rm -f /run/seatd.sock
-seatd -g root &
+seatd -g kiosk &
 SEATD_PID=$!
 
 for _ in $(seq 1 50); do
@@ -31,7 +39,8 @@ until curl -fsS -o /dev/null http://127.0.0.1:8090/kiosk/config; do
 done
 
 # cage must not be exec'd so the TERM trap can stop seatd too; wait is interruptible.
-cage -s -- chromium --kiosk --ozone-platform=wayland --noerrdialogs \
+setpriv --reuid=kiosk --regid=kiosk --groups="${GROUPS_CSV:-$(id -g kiosk)}" \
+  cage -s -- chromium --kiosk --ozone-platform=wayland --noerrdialogs \
   --disable-pinch --overscroll-history-navigation=0 \
   --disable-features=Translate --no-first-run \
   --user-data-dir=/tmp/chromium --password-store=basic \
