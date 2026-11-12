@@ -87,7 +87,9 @@ export default function ScanScreen() {
               {s.status === 'completed' ? <button className="w-full h-full flex items-center justify-center" onClick={() => setAct(s)} aria-label="Scan actions"><img src={thumbs.scan(s.scan_id)} alt="" className="max-h-full max-w-full object-contain" /></button> : <FileText className={s.status === 'failed' ? 'text-err' : 'text-slate-500'} />}
             </div>
             <div className="text-xs text-slate-300 text-center py-0.5">{s.status === 'completed' ? `${s.page_count}p ${s.format}` : s.status}</div>
-            <button className="btn !px-1" disabled={s.status !== 'completed'} onClick={() => setAct(s)}><SendI size={18} />Actions</button>
+            {s.status === 'completed' || s.status === 'scanning'
+              ? <button className="btn !px-1" disabled={s.status !== 'completed'} onClick={() => setAct(s)}><SendI size={18} />Actions</button>
+              : <ConfirmBtn label="Delete" confirmLabel="Sure?" className="!px-1" icon={<Trash2 size={18} />} onConfirm={() => remove(s)} />}
           </div>
         ))}
       </div>
