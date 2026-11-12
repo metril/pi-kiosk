@@ -21,12 +21,14 @@ export function General({ cfg, set }: P) {
   )
 }
 
-export function LoginMethods({ cfg, set }: P) {
+export function LoginMethods({ cfg, set, toast }: P & { toast: (k: 'ok' | 'err', m: string) => void }) {
   const [pc, setPc] = useState<LoginConfig | null>(null)
   useEffect(() => { api<LoginConfig>('login-config').then(setPc).catch(() => setPc({ approve: false, pin: false, pin_length: 6, available: false })) }, [])
   const l = cfg.login ?? { qr: true, approve: false, pin: false }
+  const [clearing, setClearing] = useState(false)
+  const showRecent = l.show_recent !== false
   const on = [l.qr, l.approve, l.pin].filter(Boolean).length
-  const flip = (k: 'qr' | 'approve' | 'pin') => (v: boolean) => set((c) => { c.login = { ...(c.login ?? l), [k]: v } })
+  const flip = (k: 'qr' | 'approve' | 'pin' | 'show_recent') => (v: boolean) => set((c) => { c.login = { ...(c.login ?? l), [k]: v } })
   const last = (v: boolean) => v && on <= 1  // can't turn off the only enabled method
   return (
     <Section title="Sign-in methods" desc="How people unlock this kiosk. At least one must stay on.">
@@ -35,6 +37,9 @@ export function LoginMethods({ cfg, set }: P) {
         checked={l.approve} onChange={flip('approve')} disabled={!pc || !pc.approve || last(l.approve)} />
       <ToggleRow title="Name and PIN" desc={pc && !pc.pin ? (pc.available ? 'Turned off in Papyrus.' : 'Needs a newer Papyrus.') : `Pick your name, then enter your ${pc?.pin_length ?? 6}-digit PIN.`}
         checked={l.pin} onChange={flip('pin')} disabled={!pc || !pc.pin || last(l.pin)} />
+      <ToggleRow title="Show recent users" desc="List the last few people who signed in by name. Turning this off clears the list." checked={showRecent} onChange={flip('show_recent')} />
+      <div className="row-t"><div><b>Recent users</b><small>Forget everyone who signed in recently.</small></div>
+        <button type="button" className="btn" disabled={clearing} onClick={async () => { setClearing(true); try { await api('recent/clear', 'POST'); toast('ok', 'Recent users cleared') } catch { toast('err', 'Could not clear recent users') } setClearing(false) }}>{clearing && <Spinner />}Clear recent</button></div>
     </Section>
   )
 }

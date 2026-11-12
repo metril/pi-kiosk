@@ -400,3 +400,41 @@ async def test_pending_login_caps_per_ip_and_expires_when_unpolled(env, clock):
     clock.t += 31
     await asyncio.sleep(5.2)  # reaper tick
     assert not adm.state.logins
+
+
+async def test_admin_clear_recent_and_toggle(env):
+    c, kiosk, adm, s = env
+    grant()
+    r = await c.post("/admin/api/login/start", headers=H)
+    lid = r.json()["login_id"]
+    for _ in range(50):
+        if (await c.get(f"/admin/api/login/{lid}")).json()["state"] == "ok":
+            break
+        await asyncio.sleep(0.01)
+    rec = kiosk.state.recent
+    rec.record(1); rec.record(2)
+    assert (await c.post("/admin/api/recent/clear")).status_code == 403  # CSRF header required
+    assert (await c.post("/admin/api/recent/clear", headers=H)).status_code == 200
+    assert rec.ids() == []
+    rec.record(3)
+    cfg = (await c.get("/admin/api/settings")).json()["config"]
+    assert cfg["login"]["show_recent"] is True
+    cfg["login"]["show_recent"] = False
+    assert (await c.put("/admin/api/settings", json={"config": cfg}, headers=H)).status_code == 200
+    assert rec.ids() == []
+    assert kiosk.state.effective().login_show_recent is False
+
+
+async def test_admin_clear_recent_write_failure(env, monkeypatch):
+    c, kiosk, adm, s = env
+    grant()
+    lid = (await c.post("/admin/api/login/start", headers=H)).json()["login_id"]
+    for _ in range(50):
+        if (await c.get(f"/admin/api/login/{lid}")).json()["state"] == "ok":
+            break
+        await asyncio.sleep(0.01)
+    kiosk.state.recent.record(1)
+    monkeypatch.setattr(kiosk.state.recent, "_save", lambda items: False)
+    r = await c.post("/admin/api/recent/clear", headers=H)
+    assert r.status_code == 500 and r.json()["error"]["code"] == "write_failed"
+    assert kiosk.state.recent.ids() == ["1"]

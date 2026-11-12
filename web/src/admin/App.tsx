@@ -68,7 +68,7 @@ export default function App() {
           {user && <div className="muted hidden md:block" style={{ marginTop: 'auto', fontSize: 12.5, padding: '0 12px' }}>Signed in as<br /><b style={{ color: 'var(--fg)', fontWeight: 600 }}>{user}</b></div>}
         </aside>
         <main className="min-w-0 py-2 md:py-6" style={{ display: 'grid', gap: 16, alignContent: 'start' }}>
-          {tab === 'General' && <><General {...p} /><LoginMethods {...p} /></>}
+          {tab === 'General' && <><General {...p} /><LoginMethods {...p} toast={say} /></>}
           {tab === 'Presets' && <Presets {...p} view={view} />}
           {tab === 'Label maker' && <Labelmaker {...p} saved={view.config} />}
           {tab === 'Home Assistant' && <Mqtt {...p} saved={view.config} />}

@@ -1,4 +1,5 @@
 import json
+import os
 
 from pydantic_settings import BaseSettings
 
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     login_qr: bool = True
     login_approve: bool = False
     login_pin: bool = False
+    login_show_recent: bool = True
     unlock_max_s: int = 900
     kiosk_presets: str = ""  # JSON: [{"id","label","icon","scan":{},"post":{},"targets":[]}]
     mqtt_host: str = ""
@@ -53,6 +55,10 @@ class Settings(BaseSettings):
     admin_san_hosts: str = ""  # extra comma-separated DNS names for the certificate
     admin_cert_dir: str = "/var/lib/pi-kiosk"
     settings_path: str = "/var/lib/pi-kiosk/settings.json"
+    @property
+    def recent_path(self) -> str:
+        return os.path.join(os.path.dirname(self.settings_path) or ".", "recent_users.json")
+
     # Set from the stored settings (not env): None/empty means "use the env values".
     presets_override: list[dict] | None = None
     shares: list[dict] = []

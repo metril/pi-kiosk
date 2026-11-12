@@ -82,13 +82,13 @@ async def test_disabled_gating(off):
 
 
 @respx.mock
-async def test_users_proxy_hides_nothing_secret(on):
+async def test_users_no_q_returns_only_recent_never_full_list(on):
     c, _ = on
     respx.get(f"{A}/auth/kiosk-login/config").respond(200, json=CFG)
     u = respx.get(f"{A}/auth/kiosk-login/users").respond(200, json=USERS)
     r = await c.get("/kiosk/unlock/users")
-    assert r.json() == [{"id": "1", "display_name": "Ann", "has_pin": True},
-                        {"id": "2", "display_name": "Bob", "has_pin": False}]
+    assert r.json() == []
+    assert (await c.get("/kiosk/unlock/users", params={"q": "a"})).json() == []
     assert u.calls[0].request.headers["authorization"] == "Bearer PTOK"
 
 
@@ -210,3 +210,137 @@ async def test_pin_login_stales_pending_approve_poll(on):
     await asyncio.sleep(0.1)
     assert (await c.get("/kiosk/unlock/state")).json()["user"] == "Ann"
     assert not any("t1" in str(x.request.url) for x in revoke.calls)
+
+
+BIG = [{"id": i, "display_name": f"Sam User{i}", "has_pin": i % 2 == 0} for i in range(1, 31)] + [
+    {"id": 100, "display_name": "Élodie van Der Berg", "has_pin": True},
+    {"id": 101, "display_name": "Bob Samson", "has_pin": False}]
+
+
+@respx.mock
+async def test_search_rules(on):
+    c, _ = on
+    respx.get(f"{A}/auth/kiosk-login/config").respond(200, json=CFG)
+    respx.get(f"{A}/auth/kiosk-login/users").respond(200, json=BIG)
+    g = lambda **p: c.get("/kiosk/unlock/users", params=p)  # noqa: E731
+    assert (await g(q="s")).json() == []  # min length
+    r = (await g(q="sa")).json()
+    assert len(r) == 8 and all("Sam" in x["display_name"] for x in r)  # cap 8
+    assert [x["id"] for x in (await g(q="sam", mode="pin")).json()] == ["2", "4", "6", "8", "10", "12", "14", "16"]
+    assert [x["id"] for x in (await g(q="SAMS")).json()] == ["101"]  # prefix on any word, case-insens
+    assert [x["id"] for x in (await g(q="der")).json()] == ["100"]
+    assert [x["id"] for x in (await g(q="elo")).json()] == ["100"]  # accent-insensitive
+    assert (await g(q="ams")).json() == []  # not a substring match
+
+
+@respx.mock
+async def test_list_cached(on):
+    c, _ = on
+    respx.get(f"{A}/auth/kiosk-login/config").respond(200, json=CFG)
+    u = respx.get(f"{A}/auth/kiosk-login/users").respond(200, json=USERS)
+    for _ in range(3):
+        await c.get("/kiosk/unlock/users", params={"q": "an"})
+    assert u.call_count == 1
+
+
+@respx.mock
+async def test_recent_recorded_order_cap_and_dropout(on, clock):
+    c, app = on
+    respx.get(f"{A}/auth/kiosk-login/config").respond(200, json=CFG)
+    users = respx.get(f"{A}/auth/kiosk-login/users").respond(200, json=BIG)
+    pin_ok = respx.post(f"{A}/auth/device/pin").respond(200, json=TOKEN)
+    for uid in [1, 2, 3, 4, 5, 6, 7, 2]:
+        r = await c.post("/kiosk/unlock/pin", json={"user_id": uid, "pin": "123456"})
+        assert r.json()["state"] == "unlocked", pin_ok.calls.last.request.url
+        await c.post("/kiosk/lock")
+    assert app.state.recent.ids() == ["2", "7", "6", "5", "4", "3"]
+    r = (await c.get("/kiosk/unlock/users")).json()
+    assert [x["id"] for x in r] == ["2", "7", "6", "5", "4", "3"]
+    assert [x["id"] for x in (await c.get("/kiosk/unlock/users", params={"mode": "pin"})).json()] == ["2", "6", "4"]
+    # deleted/renamed in Papyrus: drops out / updates (new cache)
+    app.state.recent.record(999)
+    users.respond(200, json=[{"id": 7, "display_name": "Renamed", "has_pin": True}, {"id": 3, "display_name": "Cy", "has_pin": True}])
+    # expire the server-side cache
+    app.state.expire_users()
+    r = (await c.get("/kiosk/unlock/users")).json()
+    assert [(x["id"], x["display_name"]) for x in r] == [("7", "Renamed")]
+
+
+@respx.mock
+async def test_recent_persisted_atomically(tmp_path):
+    from kiosk_api.recent_store import RecentStore
+    p = tmp_path / "d" / "recent_users.json"
+    s = RecentStore(str(p))
+    for i in range(9):
+        s.record(i)
+    d = json.loads(p.read_text())
+    assert [x["id"] for x in d] == ["8", "7", "6", "5", "4", "3"] and all("ts" in x for x in d)
+    assert RecentStore(str(p)).ids() == s.ids()
+    assert not list(p.parent.glob("*.tmp"))
+    s.clear()
+    assert RecentStore(str(p)).ids() == []
+
+
+@respx.mock
+async def test_approve_records_recent(on):
+    c, app = on
+    respx.get(f"{A}/auth/kiosk-login/config").respond(200, json=CFG)
+    respx.get(f"{A}/auth/kiosk-login/users").respond(200, json=USERS)
+    respx.post(f"{A}/auth/device/approve-request").respond(200, json=APPROVE)
+    respx.post(f"{A}/auth/device/token").respond(200, json=TOKEN)
+    await c.post("/kiosk/unlock/approve", json={"user_id": 2})
+    await settle(c, "unlocked")
+    assert app.state.recent.ids() == ["2"]
+    await c.post("/kiosk/lock")
+    assert [x["id"] for x in (await c.get("/kiosk/unlock/users")).json()] == ["2"]
+
+
+@respx.mock
+async def test_toggle_off_hides_and_stops_recording(tmp_path, clock):
+    app = make(tmp_path, clock, login_approve=True, login_pin=True)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://k") as c:
+            respx.get(f"{A}/auth/kiosk-login/config").respond(200, json=CFG)
+            respx.get(f"{A}/auth/kiosk-login/users").respond(200, json=USERS)
+            app.state.recent.record(1)
+            assert len((await c.get("/kiosk/unlock/users")).json()) == 1
+            cfg = Config(login={"qr": True, "approve": True, "pin": True, "show_recent": False})
+            await app.state.store.set_config(cfg)
+            assert (await c.get("/kiosk/unlock/users")).json() == []
+
+
+@respx.mock
+async def test_search_rate_limited_recent_not(on):
+    c, _ = on
+    respx.get(f"{A}/auth/kiosk-login/config").respond(200, json=CFG)
+    respx.get(f"{A}/auth/kiosk-login/users").respond(200, json=USERS)
+    for _ in range(30):
+        assert (await c.get("/kiosk/unlock/users", params={"q": "an"})).status_code == 200
+    r = await c.get("/kiosk/unlock/users", params={"q": "an"})
+    assert r.status_code == 429 and r.json()["error"]["code"] == "rate_limited"
+    assert (await c.get("/kiosk/unlock/users")).status_code == 200
+
+
+@respx.mock
+async def test_stale_user_expires_cache(on):
+    c, app = on
+    respx.get(f"{A}/auth/kiosk-login/config").respond(200, json=CFG)
+    users = respx.get(f"{A}/auth/kiosk-login/users").respond(200, json=USERS)
+    respx.post(f"{A}/auth/device/approve-request").respond(404)
+    await c.get("/kiosk/unlock/users", params={"q": "an"})
+    assert users.call_count == 1
+    assert (await c.post("/kiosk/unlock/approve", json={"user_id": 1})).json()["error"]["code"] == "unknown_user"
+    await c.get("/kiosk/unlock/users", params={"q": "an"})
+    assert users.call_count == 2
+    respx.post(f"{A}/auth/device/pin").respond(403)
+    await c.post("/kiosk/unlock/pin", json={"user_id": 1, "pin": "123456"})
+    await c.get("/kiosk/unlock/users", params={"q": "an"})
+    assert users.call_count == 3
+
+
+def test_clear_failure_keeps_list(tmp_path, monkeypatch):
+    from kiosk_api.recent_store import RecentStore
+    s = RecentStore(str(tmp_path / "r.json"))
+    s.record(1)
+    monkeypatch.setattr("os.replace", lambda *a: (_ for _ in ()).throw(OSError("ro")))
+    assert s.clear() is False and s.ids() == ["1"]

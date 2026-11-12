@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import unicodedata
 import time
 import tempfile
 from contextlib import asynccontextmanager
@@ -15,6 +16,7 @@ from .admin import RateLimit
 from .config import Settings
 from . import papyrus_auth as pa
 from .settings_store import SettingsStore, effective, refresh_cache
+from .recent_store import RecentStore
 from .session import Unlock
 from .screen import NoBacklight, NoBrightness, Screen
 from .stats import Stats
@@ -79,6 +81,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     base = settings or Settings()
     s = base
     store = SettingsStore(base.settings_path)
+    recent = RecentStore(base.recent_path)
+    ucache: dict = {"t": 0.0, "users": None}
     started = time.time()
     last_papyrus: dict = {"t": None}
 
@@ -86,6 +90,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     unlock = Unlock(s.unlock_idle_s, s.unlock_max_s)
     flow: dict = {"task": None}
     pin_limiter = RateLimit(lambda: unlock.clock(), limit=10, window=60.0)
+    search_limiter = RateLimit(lambda: unlock.clock(), limit=30, window=60.0)
     upstreams: dict = {}
 
     def apply_settings():
@@ -205,7 +210,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.unlock = unlock
-    app.state.store, app.state.base = store, base
+    app.state.expire_users = lambda: ucache.update(t=-1e9)
+    app.state.store, app.state.base, app.state.recent = store, base, recent
     app.state.on_change = on_change
     store.applier = on_change
     app.state.effective = lambda: s
@@ -272,9 +278,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def locked():
         return JSONResponse({"detail": "locked"}, 401)
 
-    async def run_poll(g: pa.Grant, gen: int):
+    def remember(uid):
+        if s.login_show_recent and uid is not None:
+            recent.record(uid)
+
+    async def run_poll(g: pa.Grant, gen: int, uid=None):
         out, body = await pa.poll_grant(pcall, g, unlock.clock, lambda: unlock.gen == gen)
         if out == "ok":
+            remember(uid)
             return await unlock.start(body.get("user"), body["access_token"],
                                       str(body["token_id"]), gen)
         if out != "stale":
@@ -308,14 +319,43 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def unlock_methods():
         return await methods()
 
-    @app.get("/kiosk/unlock/users")
-    async def unlock_users():
-        if not (await methods())["approve"] and not (await methods())["pin"]:
-            return err("disabled", 403)
+    def fold(x: str) -> str:
+        return "".join(c for c in unicodedata.normalize("NFKD", x.casefold()) if not unicodedata.combining(c))
+
+    async def all_users() -> list[dict] | None:
+        """Papyrus user list, cached ~60s server-side; never sent to the browser whole."""
+        now = time.monotonic()
+        if ucache["users"] is not None and now - ucache["t"] < 60:
+            return ucache["users"]
         users = await pa.list_users(pcall)
+        if users is not None:
+            ucache["users"], ucache["t"] = users, now
+        return users if users is not None else ucache["users"]
+
+    @app.get("/kiosk/unlock/users")
+    async def unlock_users(q: str = "", mode: str = ""):
+        m = await methods()
+        if not m["approve"] and not m["pin"]:
+            return err("disabled", 403)
+        if q.strip() and not search_limiter.allow("q"):
+            return err("rate_limited", 429)
+        users = await all_users()
         if users is None:
             return err("upstream_unreachable", 502)
-        return users
+        q = fold(q.strip())
+        if len(q) >= 2:
+            out = [u for u in users if any(w.startswith(q) for w in fold(u["display_name"]).split())
+                   or fold(u["display_name"]).startswith(q)]
+        elif q:
+            out = []
+        elif s.login_show_recent:
+            byid = {u["id"]: u for u in users}
+            out = [byid[i] for i in recent.ids() if i in byid]
+        else:
+            out = []
+        if mode == "pin":
+            out = [u for u in out if u["has_pin"]]
+        return out[:8]
 
     def good_user(v) -> bool:
         return isinstance(v, (str, int)) and not isinstance(v, bool) and bool(re.fullmatch(ID, str(v)))
@@ -334,10 +374,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if unlock.gen != gen0:
             return unlock.snapshot()
         if e:
+            if e[0] == "unknown_user":
+                ucache["t"] = -1e9
             return JSONResponse({"error": {"code": e[0]}}, e[1], e[2])
         unlock.gen += 1
         unlock.set_flow("pending", match_code=g.match_code, expires_in=int(g.expires_in))
-        flow["task"] = asyncio.create_task(run_poll(g, unlock.gen))
+        flow["task"] = asyncio.create_task(run_poll(g, unlock.gen, str(uid)))
         return unlock.snapshot()
 
     @app.post("/kiosk/unlock/pin")
@@ -377,6 +419,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 await pa.revoke_token(pcall, d["access_token"], str(d["token_id"]))
                 return unlock.snapshot()
             unlock.gen += 1  # stales any in-flight QR/approve poll
+            remember(uid)
             await unlock.start(user, d["access_token"], str(d["token_id"]), unlock.gen)
             return unlock.snapshot()
         if r.status_code == 401:
@@ -388,6 +431,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"error": {"code": "locked", "retry_after": ra}}, 423,
                                 {"Retry-After": str(int(ra))})
         if r.status_code == 403:  # unknown user or no PIN set (same answer by design)
+            ucache["t"] = -1e9
             return err("pin_unavailable", 403)
         if r.status_code == 429:
             return err("rate_limited", 429)

@@ -314,9 +314,17 @@ def create_admin_app(kiosk: FastAPI, *, tls: bool = True, cookie_secure: bool = 
         except OSError:
             log.exception("settings not written")
             return err("write_failed", 500)
+        if not cfg.login.show_recent and not ks.recent.clear():
+            return err("write_failed", 500)
         if not cur:
             asyncio.create_task(ks.refresh())  # resolve share names for offline use
         return view()
+
+    @app.post("/admin/api/recent/clear")
+    async def recent_clear(_: AdminSession = Depends(need)):
+        if not ks.recent.clear():
+            return err("write_failed", 500)
+        return {"ok": True}
 
     @app.get("/admin/api/login-config")
     async def login_config(_: AdminSession = Depends(need)):

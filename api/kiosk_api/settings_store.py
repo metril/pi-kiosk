@@ -42,6 +42,7 @@ class Login(_M):
     qr: bool = True
     approve: bool = False
     pin: bool = False
+    show_recent: bool = True
 
     @model_validator(mode="after")
     def _one_on(self):
@@ -186,7 +187,7 @@ def effective(base: Settings, st: Stored | None) -> Settings:
         "papyrus_public_url": c.public_url,
         "unlock_idle_s": c.unlock.idle_s,
         "unlock_max_s": c.unlock.max_s,
-        "login_qr": c.login.qr, "login_approve": c.login.approve, "login_pin": c.login.pin,
+        "login_qr": c.login.qr, "login_approve": c.login.approve, "login_pin": c.login.pin, "login_show_recent": c.login.show_recent,
         "presets_override": [p.model_dump() for p in c.presets],
         "shares": [x.model_dump() for x in st.smb_shares],
         "labelmaker_url": c.labelmaker.url if c.labelmaker else "",

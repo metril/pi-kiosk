@@ -6,7 +6,7 @@ export interface Preset {
 }
 export interface Config {
   name: string; public_url: string
-  unlock: { idle_s: number; max_s: number }; login: { qr: boolean; approve: boolean; pin: boolean }; screen: { idle_minutes: number }
+  unlock: { idle_s: number; max_s: number }; login: { qr: boolean; approve: boolean; pin: boolean; show_recent?: boolean }; screen: { idle_minutes: number }
   contacts: string[]; presets: Preset[]
   labelmaker: { url: string; token?: Secret } | null
   mqtt: { host: string; port: number; username: string; password?: Secret; tls: boolean; ca_pem: string

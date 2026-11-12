@@ -167,13 +167,18 @@ test('scan overlay fits 800x480 and cancels with two taps', async ({ page }) => 
 test('login methods screens fit 800x480', async ({ page }) => {
   const st = { unlocked: false }
   await mock(page, st); page.setDefaultTimeout(6000)
-  const users = Array.from({ length: 14 }, (_, i) => ({ id: String(i + 1), display_name: ['Alexandra Longname', 'Bob', 'Carol Smith', 'Dmitri', 'Eve', 'Frank', 'Grace', 'Heidi', 'Ivan', 'Judy', 'Karl', 'Liam Johnson', 'Mia', 'Noah'][i], has_pin: i % 2 === 0 }))
-  const flow = { approve: false }
+  const users = Array.from({ length: 14 }, (_, i) => ({ id: String(i + 1), display_name: ['Alexandra Longname-Featherstonehaugh', 'Bob', 'Carol Smith', 'Dmitri', 'Eve', 'Frank', 'Grace', 'Heidi', 'Ivan', 'Judy', 'Karl', 'Liam Johnson', 'Mia', 'Noah'][i], has_pin: i % 2 === 0 }))
+  const flow = { approve: false, noRecent: false }
   const json = (route: any, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
   await page.route(/\/kiosk\/unlock\//, (route) => {
     const p = new URL(route.request().url()).pathname
     if (p === '/kiosk/unlock/methods') return json(route, { qr: true, approve: true, pin: true, pin_length: 6 })
-    if (p === '/kiosk/unlock/users') return json(route, users)
+    if (p === '/kiosk/unlock/users') {
+      const u = new URL(route.request().url()); const q = (u.searchParams.get('q') || '').toLowerCase(); const pin = u.searchParams.get('mode') === 'pin'
+      const pool = pin ? users.filter((x) => x.has_pin) : users
+      if (q.length >= 2) return json(route, pool.filter((x) => x.display_name.toLowerCase().split(' ').some((w) => w.startsWith(q))).slice(0, 8))
+      return json(route, flow.noRecent ? [] : pool.slice(0, 6))
+    }
     if (p === '/kiosk/unlock/approve') { flow.approve = true; return json(route, { state: 'pending', match_code: '42', expires_in: 120 }) }
     if (p === '/kiosk/unlock/pin') return json(route, { error: { code: 'wrong_pin', remaining: 3 } }, 401)
     if (p === '/kiosk/lock') { flow.approve = false; return json(route, { state: 'locked' }) }
@@ -183,14 +188,31 @@ test('login methods screens fit 800x480', async ({ page }) => {
   await page.goto('/')
   await page.mouse.click(400, 240)
   await page.getByRole('tab', { name: 'Approve' }).click()
-  await page.getByText('Alexandra Longname').waitFor(); await check(page, '26-approve-pick')
-  await page.getByText('Alexandra Longname').click()
+  await page.getByText('Alexandra Longname-Featherstonehaugh').waitFor(); await check(page, '26-approve-pick')
+  await page.getByText('Alexandra Longname-Featherstonehaugh').click()
   await page.getByText('Approve on your phone').waitFor(); await check(page, '27-approve-code')
   await page.getByRole('button', { name: 'Cancel', exact: true }).click()
   await page.getByRole('tab', { name: 'PIN' }).click()
-  await page.getByText('Alexandra Longname').waitFor(); await check(page, '28-pin-pick')
-  await page.getByText('Alexandra Longname').click()
+  await page.getByText('Alexandra Longname-Featherstonehaugh').waitFor(); await check(page, '28-pin-pick')
+  await page.getByText('Alexandra Longname-Featherstonehaugh').click()
   await page.getByLabel('PIN').waitFor(); await check(page, '29-pin-pad')
   for (const d of '000000') await page.getByRole('button', { name: d, exact: true }).click()
   await page.getByText('Wrong PIN, 3 tries left').waitFor(); await check(page, '30-pin-wrong')
+  // search: "Someone else" opens the keyboard view; tabs hide while it is open
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await page.getByRole('button', { name: 'Someone else' }).click()
+  await page.getByLabel('Keyboard').waitFor(); await check(page, '31-search-empty')
+  for (const c of 'AL') await page.getByRole('button', { name: c, exact: true }).click()
+  await page.getByText('Alexandra Longname-Featherstonehaugh').waitFor(); await check(page, '32-search-results')
+  await page.getByRole('button', { name: 'Clear' }).click()
+  for (const c of 'KA') await page.getByRole('button', { name: c, exact: true }).click()
+  await page.getByRole('button', { name: 'Karl' }).waitFor()
+  await page.getByRole('button', { name: 'Backspace' }).click()
+  await page.getByText('Type at least 2 letters').waitFor()
+  // no recent users: opens the search directly
+  await expect(page.getByRole('tab', { name: 'Approve' })).toHaveCount(0)  // tabs hidden under the keyboard
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  flow.noRecent = true
+  await page.getByRole('tab', { name: 'Approve' }).click()
+  await page.getByLabel('Keyboard').waitFor(); await check(page, '33-search-direct')
 })

@@ -57,7 +57,7 @@ export function PinPad({ onSubmit, onCancel, busy, message, title = 'Enter relea
   const card = (
     <div className={inline ? 'flex gap-3 w-full max-w-[620px]' : 'bg-panel border border-line rounded-2xl p-3 w-[620px] flex gap-3'}>
       <div className="flex-1 flex flex-col gap-2 min-w-0">
-        <div className="text-xl font-bold truncate">{title}</div>
+        <div className="text-xl font-bold leading-tight line-clamp-2 break-words min-h-[50px]">{title}</div>
         <div className="text-warn min-h-[24px]">{message}</div>
         <div className="bg-bg rounded-xl h-14 flex items-center justify-center text-3xl tracking-[0.3em]" aria-label="PIN">{'•'.repeat(pin.length) || ' '}</div>
         <div className="flex-1" />
@@ -73,6 +73,23 @@ export function PinPad({ onSubmit, onCancel, busy, message, title = 'Enter relea
     </div>
   )
   return inline ? card : <div className="absolute inset-0 z-30 bg-black/85 flex items-center justify-center">{card}</div>
+}
+
+// ---- on-screen A-Z keyboard (ten keys per row, 44px tall so three rows plus a field fit 800x480).
+const KB_ROWS = ['QWERTYUIOP', 'ASDFGHJKL', 'ZXCVBNM']
+export function Keyboard({ value, onChange, max = 40 }: { value: string; onChange: (v: string) => void; max?: number }) {
+  const add = (c: string) => { if (value.length < max) onChange(value + c) }
+  const key = 'btn !min-h-[44px] h-11 !min-w-0 !px-0 text-xl'
+  return (
+    <div className="grid grid-cols-10 gap-1.5 w-full" aria-label="Keyboard">
+      {KB_ROWS[0].split('').map((c) => <button key={c} className={key} onClick={() => add(c)}>{c}</button>)}
+      {KB_ROWS[1].split('').map((c) => <button key={c} className={key} onClick={() => add(c)}>{c}</button>)}
+      <button className={key} aria-label="Backspace" onClick={() => onChange(value.slice(0, -1))}><Delete /></button>
+      {KB_ROWS[2].split('').map((c) => <button key={c} className={key} onClick={() => add(c)}>{c}</button>)}
+      <button className={`${key} col-span-2`} aria-label="Space" onClick={() => add(' ')}>Space</button>
+      <button className={key} aria-label="Clear" onClick={() => onChange('')}>Clear</button>
+    </div>
+  )
 }
 
 export function Spinner({ size = 24, className = '', label }: { size?: number; className?: string; label?: string }) {

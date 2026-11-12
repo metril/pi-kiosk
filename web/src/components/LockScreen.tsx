@@ -36,6 +36,7 @@ export default function LockScreen() {
   const [err, setErr] = useState('')
   const [methods, setMethods] = useState<LoginMethods>(DEFAULT)
   const [pick, setPick] = useState<Mode>('qr')
+  const [searching, setSearching] = useState(false)  // on-screen keyboard open: hide the method tabs to fit
   const modes = (['qr', 'approve', 'pin'] as Mode[]).filter((m) => methods[m])
   const mode: Mode = modes.includes(pick) ? pick : modes[0] ?? 'qr'
   const modeRef = useRef(mode); modeRef.current = mode
@@ -73,6 +74,8 @@ export default function LockScreen() {
     api.lock().then(setSession).catch(() => {})  // always drop any pending request/poll
   }
 
+  const leave = () => { const o = modes.find((m) => m !== mode); if (o) choose(o) }
+
   const pending = s.state === 'pending' && s.qr_uri
   const qr = pending ? (
     <>
@@ -102,7 +105,7 @@ export default function LockScreen() {
         <Clock />
       </div>
       <div className="flex-1 min-h-0 bg-panel border border-line rounded-2xl flex flex-col gap-3 p-3">
-        {modes.length > 1 && (
+        {modes.length > 1 && !searching && (
           <div role="tablist" className="flex gap-2 shrink-0" onPointerDown={(e) => e.stopPropagation()}>
             {modes.map((m) => (
               <button key={m} role="tab" aria-selected={m === mode} className={`btn flex-1 ${m === mode ? 'btn-acc' : ''}`} onClick={() => choose(m)}>{LABELS[m]}</button>
@@ -110,7 +113,7 @@ export default function LockScreen() {
           </div>
         )}
         <div className={`flex-1 min-h-0 flex items-center justify-center gap-8 px-3 ${mode === 'qr' ? '' : 'flex-col'}`}>
-          {mode === 'qr' ? qr : mode === 'approve' ? <ApproveView s={s} /> : <PinView length={methods.pin_length} />}
+          {mode === 'qr' ? qr : mode === 'approve' ? <ApproveView s={s} onSearching={setSearching} onLeave={leave} /> : <PinView length={methods.pin_length} onSearching={setSearching} onLeave={leave} />}
         </div>
       </div>
       <div className="h-8 shrink-0 flex items-center justify-center">{!asleep && <Ready />}</div>

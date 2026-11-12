@@ -148,7 +148,14 @@ export const api = {
   unlockStart: () => post<UnlockState>('/kiosk/unlock/start', undefined, true),
   unlockState: (sg?: Sig) => get<UnlockState>('/kiosk/unlock/state', true, sg),
   unlockMethods: (sg?: Sig) => get<LoginMethods>('/kiosk/unlock/methods', true, sg),
-  unlockUsers: (sg?: Sig) => get<LoginUser[]>('/kiosk/unlock/users', true, sg),
+  /** No `q`: recent users. `q` (2+ chars): up to 8 prefix matches. `mode: 'pin'` keeps only users with a PIN. */
+  unlockUsers: (o: { q?: string; mode?: 'pin' } = {}, sg?: Sig) => {
+    const p = new URLSearchParams()
+    if (o.q) p.set('q', o.q)
+    if (o.mode) p.set('mode', o.mode)
+    const s = p.toString()
+    return get<LoginUser[]>('/kiosk/unlock/users' + (s ? `?${s}` : ''), true, sg)
+  },
   unlockApprove: (user_id: string) => post<UnlockState>('/kiosk/unlock/approve', { user_id }, true),
   unlockPin: (user_id: string, pin: string) => post<UnlockState>('/kiosk/unlock/pin', { user_id, pin }, true),
   unlockTouch: () => post<UnlockState>('/kiosk/unlock/touch', undefined, true),
