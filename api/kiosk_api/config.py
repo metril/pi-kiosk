@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     scan_email_to: str = ""  # deprecated, ignored (email goes to the signed-in user via "me")
     papyrus_public_url: str = ""
     unlock_idle_s: int = 120
+    login_qr: bool = True
+    login_approve: bool = False
+    login_pin: bool = False
     unlock_max_s: int = 900
     kiosk_presets: str = ""  # JSON: [{"id","label","icon","scan":{},"post":{},"targets":[]}]
     mqtt_host: str = ""

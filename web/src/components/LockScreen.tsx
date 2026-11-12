@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Smartphone } from 'lucide-react'
-import { api } from '../api'
+import { ApproveView, PinView } from './LoginMethods'
+import { api, type LoginMethods } from '../api'
 import { usePoll } from '../hooks'
 import { useConfig, useAsleep } from '../store'
 import { useSession, getSession, setSession, wasUnlocked } from '../session'
@@ -25,17 +26,26 @@ function Clock() {
   return <span className="text-4xl font-bold tabular-nums">{t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
 }
 
+type Mode = 'qr' | 'approve' | 'pin'
+const LABELS: Record<Mode, string> = { qr: 'QR code', approve: 'Approve', pin: 'PIN' }
+const DEFAULT: LoginMethods = { qr: true, approve: false, pin: false, pin_length: 6 }
+
 /** Full-screen sign-in. The device-grant flow starts on first touch/wake and restarts only while awake. */
 export default function LockScreen() {
   const s = useSession(), cfg = useConfig(), asleep = useAsleep()
   const [err, setErr] = useState('')
+  const [methods, setMethods] = useState<LoginMethods>(DEFAULT)
+  const [pick, setPick] = useState<Mode>('qr')
+  const modes = (['qr', 'approve', 'pin'] as Mode[]).filter((m) => methods[m])
+  const mode: Mode = modes.includes(pick) ? pick : modes[0] ?? 'qr'
+  const modeRef = useRef(mode); modeRef.current = mode
   const armed = useRef(wasUnlocked())  // touched since the screen last slept
   const awake = useRef(!asleep); awake.current = !asleep
   const next = useRef(0), busy = useRef(false), wasAsleep = useRef(asleep)
 
   const tick = useCallback(async () => {
     const st = getSession().state
-    if (!armed.current || !awake.current || busy.current || Date.now() < next.current || st === 'pending' || st === 'unlocked') return
+    if (modeRef.current !== 'qr' || !armed.current || !awake.current || busy.current || Date.now() < next.current || st === 'pending' || st === 'unlocked') return
     busy.current = true
     try {
       if (st === 'denied') next.current = Date.now() + 5000
@@ -56,36 +66,52 @@ export default function LockScreen() {
   useEffect(() => { const i = setInterval(tick, 1000); return () => clearInterval(i) }, [tick])
   // Track server-side flow state (phone approval, expiry, HA lock).
   usePoll((sg) => api.unlockState(sg).then(setSession), 2000)
+  usePoll((sg) => api.unlockMethods(sg).then(setMethods).catch(() => {}), 30000)
+  const choose = (m: Mode) => {
+    if (m === mode) return
+    setPick(m); setErr('')
+    api.lock().then(setSession).catch(() => {})  // always drop any pending request/poll
+  }
 
   const pending = s.state === 'pending' && s.qr_uri
+  const qr = pending ? (
+    <>
+      <Qr text={s.qr_uri!} size={modes.length > 1 ? 220 : 260} />
+      <div className="flex flex-col gap-3 min-w-0">
+        <div className="text-3xl font-bold flex items-center gap-2"><Smartphone size={32} />Sign in with your phone</div>
+        <div className="text-lg text-slate-300">Scan the code, sign in, and enter</div>
+        <div className="text-6xl font-bold tracking-[0.12em] text-acc">{s.user_code}</div>
+        <div className="flex items-center gap-2 text-slate-400"><Spinner size={18} />Waiting for approval…</div>
+      </div>
+    </>
+  ) : (
+    <div className="flex flex-col items-center gap-3 text-center">
+      <Smartphone size={72} className="text-acc" />
+      <div className="text-4xl font-bold">Sign in with your phone</div>
+      <div className="text-xl text-slate-300">
+        {err || (s.state === 'denied' ? 'Request denied. Touch the screen to retry.'
+          : armed.current ? 'Getting your sign-in code…' : 'Touch the screen to start')}
+      </div>
+      {armed.current && !err && s.state !== 'denied' && <Spinner size={28} />}
+    </div>
+  )
   return (
     <div className="w-full h-full bg-bg flex flex-col p-4 gap-3" onPointerDown={touch}>
       <div className="flex items-center justify-between h-12 shrink-0">
         <h1 className="text-3xl font-bold truncate">{cfg?.name || 'Kiosk'}</h1>
         <Clock />
       </div>
-      <div className="flex-1 min-h-0 bg-panel border border-line rounded-2xl flex items-center justify-center gap-8 px-6">
-        {pending ? (
-          <>
-            <Qr text={s.qr_uri!} size={260} />
-            <div className="flex flex-col gap-3 min-w-0">
-              <div className="text-3xl font-bold flex items-center gap-2"><Smartphone size={32} />Sign in with your phone</div>
-              <div className="text-lg text-slate-300">Scan the code, sign in, and enter</div>
-              <div className="text-6xl font-bold tracking-[0.12em] text-acc">{s.user_code}</div>
-              <div className="flex items-center gap-2 text-slate-400"><Spinner size={18} />Waiting for approval…</div>
-            </div>
-          </>
-        ) : (
-          <div className="flex flex-col items-center gap-3 text-center">
-            <Smartphone size={72} className="text-acc" />
-            <div className="text-4xl font-bold">Sign in with your phone</div>
-            <div className="text-xl text-slate-300">
-              {err || (s.state === 'denied' ? 'Request denied. Touch the screen to retry.'
-                : armed.current ? 'Getting your sign-in code…' : 'Touch the screen to start')}
-            </div>
-            {armed.current && !err && s.state !== 'denied' && <Spinner size={28} />}
+      <div className="flex-1 min-h-0 bg-panel border border-line rounded-2xl flex flex-col gap-3 p-3">
+        {modes.length > 1 && (
+          <div role="tablist" className="flex gap-2 shrink-0" onPointerDown={(e) => e.stopPropagation()}>
+            {modes.map((m) => (
+              <button key={m} role="tab" aria-selected={m === mode} className={`btn flex-1 ${m === mode ? 'btn-acc' : ''}`} onClick={() => choose(m)}>{LABELS[m]}</button>
+            ))}
           </div>
         )}
+        <div className={`flex-1 min-h-0 flex items-center justify-center gap-8 px-3 ${mode === 'qr' ? '' : 'flex-col'}`}>
+          {mode === 'qr' ? qr : mode === 'approve' ? <ApproveView s={s} /> : <PinView length={methods.pin_length} />}
+        </div>
       </div>
       <div className="h-8 shrink-0 flex items-center justify-center">{!asleep && <Ready />}</div>
     </div>

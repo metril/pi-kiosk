@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 
 from . import mqtt
+from .admin import RateLimit
 from .config import Settings
 from . import papyrus_auth as pa
 from .settings_store import SettingsStore, effective, refresh_cache
@@ -84,6 +85,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     scr = Screen(s.backlight_path)
     unlock = Unlock(s.unlock_idle_s, s.unlock_max_s)
     flow: dict = {"task": None}
+    pin_limiter = RateLimit(lambda: unlock.clock(), limit=10, window=60.0)
     upstreams: dict = {}
 
     def apply_settings():
@@ -282,6 +284,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def unlock_start():
         if unlock.active():
             return unlock.snapshot()
+        if not s.login_qr:
+            return err("disabled", 403)
         gen0 = unlock.gen
         g, e = await pa.request_grant(pcall, s.kiosk_name, unlock.clock)
         if unlock.gen != gen0:  # locked/restarted meanwhile: drop the result
@@ -293,6 +297,101 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         user_code=g.user_code, expires_in=int(g.expires_in))
         flow["task"] = asyncio.create_task(run_poll(g, unlock.gen))
         return unlock.snapshot()
+
+    async def methods() -> dict:
+        """Effective login methods: kiosk toggle AND what Papyrus reports as enabled."""
+        pc = await pa.login_config(pcall)
+        return {"qr": s.login_qr, "approve": s.login_approve and pc["approve"],
+                "pin": s.login_pin and pc["pin"], "pin_length": pc["pin_length"]}
+
+    @app.get("/kiosk/unlock/methods")
+    async def unlock_methods():
+        return await methods()
+
+    @app.get("/kiosk/unlock/users")
+    async def unlock_users():
+        if not (await methods())["approve"] and not (await methods())["pin"]:
+            return err("disabled", 403)
+        users = await pa.list_users(pcall)
+        if users is None:
+            return err("upstream_unreachable", 502)
+        return users
+
+    def good_user(v) -> bool:
+        return isinstance(v, (str, int)) and not isinstance(v, bool) and bool(re.fullmatch(ID, str(v)))
+
+    @app.post("/kiosk/unlock/approve")
+    async def unlock_approve(body: dict):
+        if unlock.active():
+            return unlock.snapshot()
+        if not (await methods())["approve"]:
+            return err("disabled", 403)
+        uid = body.get("user_id")
+        if not good_user(uid):
+            return err("bad_request", 400)
+        gen0 = unlock.gen
+        g, e = await pa.approve_request(pcall, str(uid), s.kiosk_name, unlock.clock)
+        if unlock.gen != gen0:
+            return unlock.snapshot()
+        if e:
+            return JSONResponse({"error": {"code": e[0]}}, e[1], e[2])
+        unlock.gen += 1
+        unlock.set_flow("pending", match_code=g.match_code, expires_in=int(g.expires_in))
+        flow["task"] = asyncio.create_task(run_poll(g, unlock.gen))
+        return unlock.snapshot()
+
+    @app.post("/kiosk/unlock/pin")
+    async def unlock_pin(body: dict):
+        if unlock.active():
+            return unlock.snapshot()
+        m = await methods()
+        if not m["pin"]:
+            return err("disabled", 403)
+        uid, pin = body.get("user_id"), body.get("pin")
+        if not good_user(uid) or not isinstance(pin, str) or not re.fullmatch(r"\d{1,12}", pin):
+            return err("bad_request", 400)
+        if not pin_limiter.allow("pin"):
+            return err("rate_limited", 429)
+        gen0 = unlock.gen
+        r = await pa.pin_login(pcall, str(uid), pin, s.kiosk_name)
+        if r is None:
+            return err("upstream_unreachable", 502)
+        try:
+            d = r.json()
+        except ValueError:
+            d = {}
+        d = d if isinstance(d, dict) else {}
+        if isinstance(d.get("detail"), dict):
+            d = {**d, **d["detail"]}
+        if r.status_code == 200:
+            if not d.get("access_token") or not d.get("token_id"):
+                return err("upstream_error", 502)
+            user = d.get("user")
+            if not user:
+                mr = await pcall("GET", pa.ME, d["access_token"])
+                try:
+                    user = mr.json() if mr is not None and mr.status_code == 200 else None
+                except ValueError:
+                    user = None
+            if unlock.gen != gen0:  # locked/restarted meanwhile: drop the token
+                await pa.revoke_token(pcall, d["access_token"], str(d["token_id"]))
+                return unlock.snapshot()
+            unlock.gen += 1  # stales any in-flight QR/approve poll
+            await unlock.start(user, d["access_token"], str(d["token_id"]), unlock.gen)
+            return unlock.snapshot()
+        if r.status_code == 401:
+            rem = d.get("remaining")
+            return err("wrong_pin", 401, remaining=rem if isinstance(rem, int) else None)
+        if r.status_code == 423:
+            ra = d.get("retry_after")
+            ra = ra if isinstance(ra, (int, float)) and not isinstance(ra, bool) else pa.retry_after(r)
+            return JSONResponse({"error": {"code": "locked", "retry_after": ra}}, 423,
+                                {"Retry-After": str(int(ra))})
+        if r.status_code == 403:  # unknown user or no PIN set (same answer by design)
+            return err("pin_unavailable", 403)
+        if r.status_code == 429:
+            return err("rate_limited", 429)
+        return err("upstream_error", 502)
 
     @app.get("/kiosk/unlock/state")
     async def unlock_state():

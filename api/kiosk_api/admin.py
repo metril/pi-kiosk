@@ -318,6 +318,13 @@ def create_admin_app(kiosk: FastAPI, *, tls: bool = True, cookie_secure: bool = 
             asyncio.create_task(ks.refresh())  # resolve share names for offline use
         return view()
 
+    @app.get("/admin/api/login-config")
+    async def login_config(_: AdminSession = Depends(need)):
+        """What Papyrus allows (shared token); older Papyrus reports everything optional off."""
+        r = await pcall("GET", pa.LOGIN_CONFIG)
+        avail = r is not None and r.status_code == 200
+        return {**await pa.login_config(pcall), "available": avail}
+
     # ---- Papyrus pickers (admin's own token) ----
     async def papyrus_get(s: AdminSession, path: str, params=None):
         r = await pcall("GET", path, s.token, params=params)

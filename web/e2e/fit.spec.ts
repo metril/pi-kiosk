@@ -163,3 +163,34 @@ test('scan overlay fits 800x480 and cancels with two taps', async ({ page }) => 
   expect(st.cancelled).toBe(true); expect(st.sid).toMatch(/^[0-9a-f-]{36}$/)
   await page.waitForSelector('text=Page 2 ·', { state: 'detached' })
 })
+
+test('login methods screens fit 800x480', async ({ page }) => {
+  const st = { unlocked: false }
+  await mock(page, st); page.setDefaultTimeout(6000)
+  const users = Array.from({ length: 14 }, (_, i) => ({ id: String(i + 1), display_name: ['Alexandra Longname', 'Bob', 'Carol Smith', 'Dmitri', 'Eve', 'Frank', 'Grace', 'Heidi', 'Ivan', 'Judy', 'Karl', 'Liam Johnson', 'Mia', 'Noah'][i], has_pin: i % 2 === 0 }))
+  const flow = { approve: false }
+  const json = (route: any, body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
+  await page.route(/\/kiosk\/unlock\//, (route) => {
+    const p = new URL(route.request().url()).pathname
+    if (p === '/kiosk/unlock/methods') return json(route, { qr: true, approve: true, pin: true, pin_length: 6 })
+    if (p === '/kiosk/unlock/users') return json(route, users)
+    if (p === '/kiosk/unlock/approve') { flow.approve = true; return json(route, { state: 'pending', match_code: '42', expires_in: 120 }) }
+    if (p === '/kiosk/unlock/pin') return json(route, { error: { code: 'wrong_pin', remaining: 3 } }, 401)
+    if (p === '/kiosk/lock') { flow.approve = false; return json(route, { state: 'locked' }) }
+    if (p === '/kiosk/unlock/state') return json(route, flow.approve ? { state: 'pending', match_code: '42', expires_in: 120 } : { state: 'locked' })
+    return route.fallback()
+  })
+  await page.goto('/')
+  await page.mouse.click(400, 240)
+  await page.getByRole('tab', { name: 'Approve' }).click()
+  await page.getByText('Alexandra Longname').waitFor(); await check(page, '26-approve-pick')
+  await page.getByText('Alexandra Longname').click()
+  await page.getByText('Approve on your phone').waitFor(); await check(page, '27-approve-code')
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await page.getByRole('tab', { name: 'PIN' }).click()
+  await page.getByText('Alexandra Longname').waitFor(); await check(page, '28-pin-pick')
+  await page.getByText('Alexandra Longname').click()
+  await page.getByLabel('PIN').waitFor(); await check(page, '29-pin-pad')
+  for (const d of '000000') await page.getByRole('button', { name: d, exact: true }).click()
+  await page.getByText('Wrong PIN, 3 tries left').waitFor(); await check(page, '30-pin-wrong')
+})

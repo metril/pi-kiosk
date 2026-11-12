@@ -41,29 +41,38 @@ export function ConfirmBtn({ label, confirmLabel = 'Sure?', onConfirm, className
   )
 }
 
-// ---- numeric PIN keypad (two columns so it fits the 800x480 content area)
-export function PinPad({ onSubmit, onCancel, busy, message }: { onSubmit: (pin: string) => void; onCancel: () => void; busy?: boolean; message?: string }) {
+// ---- numeric PIN keypad (two columns so it fits the 800x480 content area).
+// `autoLength` submits at that many digits; `inline` renders in place instead of as an overlay;
+// bumping `resetKey` clears the entered digits.
+export function PinPad({ onSubmit, onCancel, busy, message, title = 'Enter release PIN', submitLabel = 'Release', autoLength, inline, resetKey }: { onSubmit: (pin: string) => void; onCancel: () => void; busy?: boolean; message?: string; title?: string; submitLabel?: string; autoLength?: number; inline?: boolean; resetKey?: number }) {
   const [pin, setPin] = useState('')
-  const add = (d: string) => setPin((p) => (p.length < 8 ? p + d : p))
-  return (
-    <div className="absolute inset-0 z-30 bg-black/85 flex items-center justify-center">
-      <div className="bg-panel border border-line rounded-2xl p-3 w-[620px] flex gap-3">
-        <div className="flex-1 flex flex-col gap-2 min-w-0">
-          <div className="text-xl font-bold">Enter release PIN</div>
-          <div className="text-warn min-h-[24px]">{message}</div>
-          <div className="bg-bg rounded-xl h-14 flex items-center justify-center text-3xl tracking-[0.5em]">{'•'.repeat(pin.length) || ' '}</div>
-          <div className="flex-1" />
-          <button className="btn btn-acc w-full" disabled={!pin || busy} onClick={() => onSubmit(pin)}>{busy ? 'Checking…' : 'Release'}</button>
-        </div>
-        <div className="grid grid-cols-3 gap-2 w-[300px] shrink-0">
-          {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((d) => <button key={d} className="btn text-2xl" onClick={() => add(d)}>{d}</button>)}
-          <button className="btn" onClick={onCancel}>Cancel</button>
-          <button className="btn text-2xl" onClick={() => add('0')}>0</button>
-          <button className="btn" onClick={() => setPin((p) => p.slice(0, -1))}><Delete /></button>
-        </div>
+  useEffect(() => { setPin('') }, [resetKey])
+  const max = autoLength ?? 8
+  const add = (d: string) => {
+    if (busy || pin.length >= max) return
+    const n = pin + d
+    setPin(n)
+    if (autoLength && n.length === autoLength) onSubmit(n)
+  }
+  const card = (
+    <div className={inline ? 'flex gap-3 w-full max-w-[620px]' : 'bg-panel border border-line rounded-2xl p-3 w-[620px] flex gap-3'}>
+      <div className="flex-1 flex flex-col gap-2 min-w-0">
+        <div className="text-xl font-bold truncate">{title}</div>
+        <div className="text-warn min-h-[24px]">{message}</div>
+        <div className="bg-bg rounded-xl h-14 flex items-center justify-center text-3xl tracking-[0.3em]" aria-label="PIN">{'•'.repeat(pin.length) || ' '}</div>
+        <div className="flex-1" />
+        {!autoLength && <button className="btn btn-acc w-full" disabled={!pin || busy} onClick={() => onSubmit(pin)}>{busy ? 'Checking…' : submitLabel}</button>}
+        {autoLength && <div className="text-slate-400 h-12 flex items-center justify-center gap-2">{busy ? <><Spinner size={18} />Checking…</> : `${autoLength} digits`}</div>}
+      </div>
+      <div className="grid grid-cols-3 gap-2 w-[300px] shrink-0">
+        {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((d) => <button key={d} className="btn text-2xl" onClick={() => add(d)}>{d}</button>)}
+        <button className="btn" onClick={onCancel}>{inline ? 'Back' : 'Cancel'}</button>
+        <button className="btn text-2xl" onClick={() => add('0')}>0</button>
+        <button className="btn" aria-label="Delete" onClick={() => setPin((p) => p.slice(0, -1))}><Delete /></button>
       </div>
     </div>
   )
+  return inline ? card : <div className="absolute inset-0 z-30 bg-black/85 flex items-center justify-center">{card}</div>
 }
 
 export function Spinner({ size = 24, className = '', label }: { size?: number; className?: string; label?: string }) {

@@ -10,7 +10,7 @@ import os
 from urllib.parse import urlsplit
 from typing import Any, Awaitable, Callable, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .config import Settings, migrate_targets
 
@@ -36,6 +36,18 @@ class Share(_M):
 class Unlock(_M):
     idle_s: int = Field(120, ge=5, le=86400)
     max_s: int = Field(900, ge=5, le=86400)
+
+
+class Login(_M):
+    qr: bool = True
+    approve: bool = False
+    pin: bool = False
+
+    @model_validator(mode="after")
+    def _one_on(self):
+        if not (self.qr or self.approve or self.pin):
+            raise ValueError("at least one login method must be enabled")
+        return self
 
 
 class Screen(_M):
@@ -82,6 +94,7 @@ class Config(_M):
     name: str = ""
     public_url: str = ""
     unlock: Unlock = Unlock()
+    login: Login = Login()
     screen: Screen = Screen()
     presets: list[Preset] = []
     labelmaker: Labelmaker | None = None
@@ -173,6 +186,7 @@ def effective(base: Settings, st: Stored | None) -> Settings:
         "papyrus_public_url": c.public_url,
         "unlock_idle_s": c.unlock.idle_s,
         "unlock_max_s": c.unlock.max_s,
+        "login_qr": c.login.qr, "login_approve": c.login.approve, "login_pin": c.login.pin,
         "presets_override": [p.model_dump() for p in c.presets],
         "shares": [x.model_dump() for x in st.smb_shares],
         "labelmaker_url": c.labelmaker.url if c.labelmaker else "",

@@ -6,7 +6,7 @@ export interface Preset {
 }
 export interface Config {
   name: string; public_url: string
-  unlock: { idle_s: number; max_s: number }; screen: { idle_minutes: number }
+  unlock: { idle_s: number; max_s: number }; login: { qr: boolean; approve: boolean; pin: boolean }; screen: { idle_minutes: number }
   contacts: string[]; presets: Preset[]
   labelmaker: { url: string; token?: Secret } | null
   mqtt: { host: string; port: number; username: string; password?: Secret; tls: boolean; ca_pem: string
@@ -38,3 +38,4 @@ export async function api<T = any>(path: string, method = 'GET', body?: unknown)
   if (!r.ok) throw new ApiError(r.status, j)
   return j as T
 }
+export interface LoginConfig { approve: boolean; pin: boolean; pin_length: number; available: boolean }

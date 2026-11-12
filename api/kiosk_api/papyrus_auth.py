@@ -14,6 +14,10 @@ DEVICE_CODE = "auth/device/code"
 DEVICE_TOKEN = "auth/device/token"
 REVOKE = "auth/tokens/{id}"
 ME = "auth/me"
+LOGIN_CONFIG = "auth/kiosk-login/config"
+LOGIN_USERS = "auth/kiosk-login/users"
+APPROVE_REQUEST = "auth/device/approve-request"
+DEVICE_PIN = "auth/device/pin"
 
 Call = Callable[..., Awaitable[httpx.Response | None]]
 
@@ -26,6 +30,7 @@ class Grant:
     expires_in: float
     interval: float
     deadline: float = 0.0  # on the caller's clock, set at request time
+    match_code: str = ""  # approve flow only
 
 
 def retry_after(r: httpx.Response) -> float:
@@ -112,3 +117,58 @@ async def revoke_token(call: Call, token: str, token_id: str):
     r = await call("DELETE", path, token)
     if r is None or (not r.is_success and r.status_code != 404):
         await call("DELETE", path)
+
+
+async def login_config(call: Call) -> dict:
+    """Papyrus's view of the optional login methods. Any failure (older Papyrus) means unavailable."""
+    off = {"approve": False, "pin": False, "pin_length": 6}
+    r = await call("GET", LOGIN_CONFIG)
+    try:
+        d = r.json() if r is not None and r.status_code == 200 else None
+        if not isinstance(d, dict):
+            return off
+        n = d.get("pin_length")
+        return {"approve": d.get("approve") is True, "pin": d.get("pin") is True,
+                "pin_length": n if isinstance(n, int) and not isinstance(n, bool) and 4 <= n <= 12 else 6}
+    except ValueError:
+        return off
+
+
+async def list_users(call: Call) -> list[dict] | None:
+    r = await call("GET", LOGIN_USERS)
+    try:
+        d = r.json() if r is not None and r.status_code == 200 else None
+    except ValueError:
+        return None
+    if not isinstance(d, list):
+        return None
+    return [{"id": str(u["id"]), "display_name": str(u.get("display_name") or u["id"]),
+             "has_pin": bool(u.get("has_pin"))} for u in d if isinstance(u, dict) and u.get("id") is not None]
+
+
+async def approve_request(call: Call, user_id: str, client_name: str,
+                          clock: Callable[[], float]) -> tuple[Grant | None, tuple | None]:
+    """Like request_grant, for a named user; the grant carries the 2-digit match_code."""
+    r = await call("POST", APPROVE_REQUEST, json={"user_id": user_id, "client_name": client_name})
+    if r is None:
+        return None, ("upstream_unreachable", 502, {})
+    if r.status_code == 429:
+        return None, ("rate_limited", 429, {"Retry-After": str(int(retry_after(r)))})
+    if r.status_code == 404:  # unknown or inactive user: the caller should refresh its list
+        return None, ("unknown_user", 404, {})
+    if r.status_code in (400, 409):
+        return None, ("request_rejected", r.status_code, {})
+    try:
+        d = r.json()
+        g = Grant(d["device_code"], "", "", float(d.get("expires_in", 120)),
+                  float(d.get("interval", 2)), match_code=str(d["match_code"]))
+    except (ValueError, KeyError, TypeError):
+        return None, ("upstream_error", 502, {})
+    if r.status_code != 200:
+        return None, ("upstream_error", 502, {})
+    g.deadline = clock() + g.expires_in
+    return g, None
+
+
+async def pin_login(call: Call, user_id: str, pin: str, client_name: str) -> httpx.Response | None:
+    return await call("POST", DEVICE_PIN, json={"user_id": user_id, "pin": pin, "client_name": client_name})

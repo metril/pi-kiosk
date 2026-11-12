@@ -27,11 +27,11 @@ export const Num = ({ label, value, onChange, hint, suffix }: { label: string; v
   <Field label={label} hint={hint}>{(id) => <div style={{ position: 'relative' }}><input id={id} className="inp" type="number" min={0} value={value} onChange={(e) => onChange(Number(e.target.value))} />{suffix && <span className="muted" style={{ position: 'absolute', right: 12, top: 9, fontSize: 13, pointerEvents: 'none' }}>{suffix}</span>}</div>}</Field>
 )
 
-export const Toggle = ({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) => (
-  <button type="button" role="switch" aria-checked={checked} aria-label={label} className="sw" onClick={() => onChange(!checked)} />
+export const Toggle = ({ checked, onChange, label, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) => (
+  <button type="button" role="switch" aria-checked={checked} aria-label={label} className="sw" disabled={disabled} onClick={() => onChange(!checked)} />
 )
-export const ToggleRow = ({ title, desc, checked, onChange }: { title: string; desc?: string; checked: boolean; onChange: (v: boolean) => void }) => (
-  <div className="row-t"><div><b>{title}</b>{desc && <small>{desc}</small>}</div><Toggle checked={checked} onChange={onChange} label={title} /></div>
+export const ToggleRow = ({ title, desc, checked, onChange, disabled }: { title: string; desc?: string; checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) => (
+  <div className="row-t" style={disabled ? { opacity: 0.6 } : undefined}><div><b>{title}</b>{desc && <small>{desc}</small>}</div><Toggle checked={checked} onChange={onChange} label={title} disabled={disabled} /></div>
 )
 
 export function Segmented<T extends string | number>({ value, options, onChange, label }: { value: T | undefined; options: { value: T; label: string }[]; onChange: (v: T) => void; label: string }) {

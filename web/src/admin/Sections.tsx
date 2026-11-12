@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ArrowDown, ArrowUp, ChevronRight, ExternalLink, FileText, Folder, GripVertical, Mail, Plus, Server, Trash2, CheckCircle2, XCircle, RefreshCw, LogOut } from 'lucide-react'
-import { api, ApiError, Config, Preset, Share, Status, Target, View } from './api'
+import { api, ApiError, Config, LoginConfig, Preset, Share, Status, Target, View } from './api'
 import { Chip, Field, ICONS, Num, Overlay, PresetIcon, SecretInput, Section, Segmented, Spinner, Text, Toggle, ToggleRow, useClickAway } from './ui'
 
 type P = { cfg: Config; set: (f: (c: Config) => void) => void }
@@ -17,6 +17,24 @@ export function General({ cfg, set }: P) {
         <Num label="Unlock max session" suffix="seconds" value={cfg.unlock.max_s} onChange={(v) => set((c) => { c.unlock.max_s = v })} hint="Locks after this long regardless of activity." />
         <Num label="Screen sleep" suffix="minutes" value={cfg.screen.idle_minutes} onChange={(v) => set((c) => { c.screen.idle_minutes = v })} hint="0 keeps the screen on." />
       </div>
+    </Section>
+  )
+}
+
+export function LoginMethods({ cfg, set }: P) {
+  const [pc, setPc] = useState<LoginConfig | null>(null)
+  useEffect(() => { api<LoginConfig>('login-config').then(setPc).catch(() => setPc({ approve: false, pin: false, pin_length: 6, available: false })) }, [])
+  const l = cfg.login ?? { qr: true, approve: false, pin: false }
+  const on = [l.qr, l.approve, l.pin].filter(Boolean).length
+  const flip = (k: 'qr' | 'approve' | 'pin') => (v: boolean) => set((c) => { c.login = { ...(c.login ?? l), [k]: v } })
+  const last = (v: boolean) => v && on <= 1  // can't turn off the only enabled method
+  return (
+    <Section title="Sign-in methods" desc="How people unlock this kiosk. At least one must stay on.">
+      <ToggleRow title="QR code" desc="Scan a code with your phone, sign in, and approve." checked={l.qr} onChange={flip('qr')} disabled={last(l.qr)} />
+      <ToggleRow title="Tap to approve" desc={pc && !pc.approve ? (pc.available ? 'Turned off in Papyrus.' : 'Needs a newer Papyrus.') : 'Pick your name, then approve with a number on your phone.'}
+        checked={l.approve} onChange={flip('approve')} disabled={!pc || !pc.approve || last(l.approve)} />
+      <ToggleRow title="Name and PIN" desc={pc && !pc.pin ? (pc.available ? 'Turned off in Papyrus.' : 'Needs a newer Papyrus.') : `Pick your name, then enter your ${pc?.pin_length ?? 6}-digit PIN.`}
+        checked={l.pin} onChange={flip('pin')} disabled={!pc || !pc.pin || last(l.pin)} />
     </Section>
   )
 }

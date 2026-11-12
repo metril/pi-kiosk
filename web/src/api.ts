@@ -1,5 +1,5 @@
 export class ApiError extends Error {
-  constructor(public status: number, public code: string, message: string, public retryAfter?: number) { super(message) }
+  constructor(public status: number, public code: string, message: string, public retryAfter?: number, public data?: any) { super(message) }
 }
 
 type Listener = () => void
@@ -21,7 +21,7 @@ function parseErr(status: number, body: any): ApiError {
     code = body.code ?? code
     msg = typeof body.detail === 'string' ? body.detail : Array.isArray(body.detail) ? body.detail.map((d: any) => d.msg).join('; ') : msg
   }
-  return new ApiError(status, code, msg)
+  return new ApiError(status, code, msg, undefined, body?.error)
 }
 
 /** Fallback on any 401 "locked" (server says locked): drop to the Lock screen. */
@@ -95,8 +95,10 @@ export interface Contact { id: string; name: string }
 export interface UnlockState {
   state: 'locked' | 'pending' | 'unlocked' | 'denied' | 'expired'
   user?: string | null; remaining_s?: number; idle_remaining_s?: number
-  qr_uri?: string; user_code?: string; expires_in?: number
+  qr_uri?: string; user_code?: string; expires_in?: number; match_code?: string
 }
+export interface LoginMethods { qr: boolean; approve: boolean; pin: boolean; pin_length: number }
+export interface LoginUser { id: string; display_name: string; has_pin: boolean }
 export interface SendResult { type: string; ok: boolean; status?: number; error?: string }
 export interface SendResp { post: Record<string, { ok: boolean }>; results: SendResult[]; all_ok: boolean; deleted: boolean }
 export interface SmbShare { id: string; name: string }
@@ -145,6 +147,10 @@ export const api = {
   kioskConfig: (sg?: Sig) => get<KioskConfig>('/kiosk/config', true, sg),
   unlockStart: () => post<UnlockState>('/kiosk/unlock/start', undefined, true),
   unlockState: (sg?: Sig) => get<UnlockState>('/kiosk/unlock/state', true, sg),
+  unlockMethods: (sg?: Sig) => get<LoginMethods>('/kiosk/unlock/methods', true, sg),
+  unlockUsers: (sg?: Sig) => get<LoginUser[]>('/kiosk/unlock/users', true, sg),
+  unlockApprove: (user_id: string) => post<UnlockState>('/kiosk/unlock/approve', { user_id }, true),
+  unlockPin: (user_id: string, pin: string) => post<UnlockState>('/kiosk/unlock/pin', { user_id, pin }, true),
   unlockTouch: () => post<UnlockState>('/kiosk/unlock/touch', undefined, true),
   lock: () => post<UnlockState>('/kiosk/lock', undefined, true),
   send: (b: { scan_id: string; targets: PresetTarget[]; post?: { ocr?: boolean; enhance?: boolean }; delete_after?: boolean }) => post<SendResp>('/kiosk/send', b, true),
