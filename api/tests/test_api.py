@@ -306,3 +306,12 @@ async def test_post_scan_refreshes_devices(client):
     respx.get(f"{P}/api/v1/printers/default/status").respond(200, json={})
     await client.post("/papyrus/scans")
     assert len(sc.calls) == 1
+
+
+@respx.mock
+async def test_revoked_user_token_locks_kiosk(client):
+    respx.get(f"{P}/api/v1/scans").respond(401, json={"detail": "Invalid token"})
+    respx.route(method="DELETE").respond(204)
+    r = await client.get("/papyrus/scans")
+    assert r.status_code == 401 and r.json() == {"detail": "locked"}
+    assert (await client.get("/kiosk/unlock/state")).json()["state"] == "locked"

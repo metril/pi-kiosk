@@ -731,6 +731,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"error": {"code": "upstream_unreachable"}}, 502)
         if 300 <= r.status_code < 400:
             return JSONResponse({"error": {"code": "upstream_redirect"}}, 502)
+        if name == "papyrus" and r.status_code == 401:
+            await unlock.lock()  # user token revoked (e.g. user deactivated): end the session
+            return locked()
         drop = DROP_RESP | {
             tok.strip().lower()
             for v in r.headers.get_list("connection") for tok in v.split(",") if tok.strip()
